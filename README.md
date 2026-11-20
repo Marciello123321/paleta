@@ -7,7 +7,8 @@ Telefony łączą się ze sobą bezpośrednio (WebRTC przez PeerJS), a **nick je
 
 ## Jak działa
 - Wybierasz nick (pierwszy kto go zajmie, ma go). Znajomych dodajesz po nicku, druga osoba przyjmuje prośbę.
-- Grupki mają wspólne notatniki z reakcjami oraz czat. Wpisy lecą od razu do wszystkich online.
+- Po lewej stała kolumna z grupkami i znajomymi, u góry pasek z dzwonieniem, wideo i ustawieniami.
+- W grupce każdy ma swój notatnik (pisze tylko właściciel, reszta czyta i reaguje emoji) oraz wspólny czat. Wpisy lecą od razu do wszystkich online.
 - Wiadomości do osób offline czekają w kolejce i są ponawiane, aż druga strona potwierdzi odbiór.
 - Rozmowy 1:1: głos, wideo, przełączanie kamery, udostępnianie ekranu (tam, gdzie przeglądarka to umie).
 

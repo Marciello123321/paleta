@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Nunito:wght@500;600;700;800&display=swap" />
-  <link rel="stylesheet" href="styles.css?v=3" />
+  <link rel="stylesheet" href="styles.css?v=4" />
 </head>
 <body>
   <!-- Ikony -->
@@ -70,47 +70,20 @@
   </div>
 
   <div class="app" id="app" hidden>
-    <!-- Panel boczny -->
-    <aside class="sidebar" id="sidebar" aria-label="Grupki, czaty i znajomi">
-      <div class="sb-head">
-        <div class="brand"><svg class="ic"><use href="#i-logo"/></svg><span>Paleta</span></div>
-        <button class="round only-mobile" id="closeSidebar" aria-label="Zamknij panel"><svg class="ic"><use href="#i-close"/></svg></button>
-      </div>
+    <!-- Lewa kolumna: grupki i znajomi -->
+    <nav class="rail" id="rail" aria-label="Grupki i czaty">
+      <button class="ri add" id="railAdd" aria-label="Dodaj znajomego lub grupkę">
+        <span class="tile"><svg class="ic"><use href="#i-plus"/></svg></span><span class="lbl">Dodaj</span><i class="dot" id="reqDot" hidden></i>
+      </button>
+      <div class="rail-sec">Grupki</div>
+      <div class="rail-list" id="groupList"></div>
+      <div class="rail-sec">Znajomi</div>
+      <div class="rail-list" id="chatList"></div>
+      <button class="ri me" id="railMe" aria-label="Ustawienia"></button>
+    </nav>
 
-      <div class="me-card">
-        <span class="avatar lg" id="meAvatar"></span>
-        <div class="me-info">
-          <div class="me-nick" id="meNick"></div>
-          <div class="net" id="netPill"><i></i><span>łączenie…</span></div>
-        </div>
-        <button class="round sm" id="shareNick" aria-label="Zaproś znajomych"><svg class="ic"><use href="#i-share"/></svg></button>
-      </div>
-
-      <button class="add-friend" id="addFriend"><svg class="ic"><use href="#i-userplus"/></svg>Dodaj znajomego po nicku</button>
-
-      <div id="requests"></div>
-
-      <label class="search"><svg class="ic"><use href="#i-search"/></svg><input id="search" type="search" placeholder="Szukaj" autocomplete="off" /></label>
-
-      <section>
-        <div class="sec-head"><h2>Grupki</h2><button class="link" id="addGroup"><svg class="ic"><use href="#i-plus"/></svg>nowa</button></div>
-        <ul class="list" id="groupList"></ul>
-      </section>
-      <section>
-        <div class="sec-head"><h2>Czaty</h2></div>
-        <ul class="list" id="chatList"></ul>
-      </section>
-      <section>
-        <div class="sec-head"><h2>Znajomi</h2></div>
-        <ul class="list" id="contactList"></ul>
-      </section>
-    </aside>
-    <div class="backdrop" id="backdrop"></div>
-
-    <!-- Główna część -->
     <main class="main">
       <header class="topbar">
-        <button class="round only-mobile" id="openSidebar" aria-label="Otwórz panel"><svg class="ic"><use href="#i-menu"/></svg><span class="dot" id="menuDot" hidden></span></button>
         <div class="title" id="titleBox">
           <div class="title-name" id="roomName"></div>
           <div class="title-sub" id="roomSub"></div>
@@ -118,24 +91,27 @@
         <div class="actions" id="roomActions">
           <button class="round call-btn" data-call="audio" aria-label="Zadzwoń"><svg class="ic big"><use href="#i-callface"/></svg></button>
           <button class="round cam-btn" data-call="video" aria-label="Rozmowa wideo"><svg class="ic"><use href="#i-video"/></svg></button>
-          <button class="round" data-call="screen" id="screenBtn" aria-label="Udostępnij ekran"><svg class="ic"><use href="#i-screen"/></svg></button>
         </div>
         <button class="round" id="openSettings" aria-label="Ustawienia"><svg class="ic"><use href="#i-sliders"/></svg></button>
       </header>
 
-      <nav class="tabs" id="tabs" role="tablist">
-        <button class="tab active" data-tab="notes" role="tab"><svg class="ic"><use href="#i-notebook"/></svg>Notatnik</button>
-        <button class="tab" data-tab="chat" role="tab"><svg class="ic"><use href="#i-chat"/></svg>Czat</button>
-      </nav>
       <div class="notebooks" id="notebookBar"></div>
-
       <section class="feed" id="feed" aria-live="polite"></section>
+      <div class="readonly" id="readonly" hidden></div>
 
       <form class="composer" id="composer">
         <textarea id="input" rows="1" placeholder="Napisz coś…" enterkeyhint="send"></textarea>
         <button class="send" type="submit" aria-label="Wyślij"><svg class="ic"><use href="#i-send"/></svg></button>
       </form>
     </main>
+  </div>
+
+  <!-- Dodaj / stwórz -->
+  <div class="sheet" id="plus" hidden>
+    <div class="sheet-card">
+      <div class="sheet-head"><h2>Dodaj</h2><button class="round sm" id="closePlus" aria-label="Zamknij"><svg class="ic"><use href="#i-close"/></svg></button></div>
+      <div id="plusBody"></div>
+    </div>
   </div>
 
   <!-- Ustawienia -->
@@ -188,6 +164,6 @@
   <div class="toast" id="toast" hidden></div>
 
   <script src="peerjs.min.js"></script>
-  <script src="app.js?v=3"></script>
+  <script src="app.js?v=4"></script>
 </body>
 </html>

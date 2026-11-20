@@ -46,14 +46,27 @@ const ic = (n, c = "") => `<svg class="ic ${c}" aria-hidden="true"><use href="#i
 
 /* ============ Stan ============ */
 function fresh() {
-  return { v: 2, me: null, theme: "noc", sound: true, contacts: [], requests: [], pending: [], names: {}, groups: [], dms: {}, outbox: {}, current: null, tab: "notes", notebook: {}, unread: {} };
+  return { v: 2, me: null, theme: "noc", sound: true, contacts: [], requests: [], pending: [], names: {}, groups: [], dms: {}, outbox: {}, current: null, view: {}, unread: {} };
 }
 function load() {
   try {
     const s = JSON.parse(localStorage.getItem(KEY));
-    if (s && s.v === 2) return { ...fresh(), ...s };
+    if (s && s.v === 2) return migrate({ ...fresh(), ...s });
   } catch {}
   return fresh();
+}
+function migrate(s) {
+  for (const g of s.groups || []) {
+    if (!g.notes) {
+      g.notes = {};
+      for (const nb of g.notebooks || []) for (const e of nb.entries || []) (g.notes[e.a] ||= []).push(e);
+      for (const l of Object.values(g.notes)) l.sort((a, b) => a.ts - b.ts);
+      delete g.notebooks;
+      s.unread = {};
+    }
+  }
+  s.view ||= {};
+  return s;
 }
 let state = load();
 function save() {
@@ -193,11 +206,7 @@ function peerOpts() {
 }
 function setNet(s) {
   netStatus = s;
-  const pill = $("#netPill");
-  if (!pill) return;
-  pill.className = "net " + s;
-  pill.querySelector("span").textContent = s === "online" ? "online" : s === "error" ? "brak sieci" : "łączenie…";
-  if (!state.current && state.me) renderMain();
+  if (state.me) renderSoon();
 }
 function startPeer(nick) {
   return new Promise((resolve, reject) => {
@@ -327,9 +336,19 @@ function broadcast(g, ev) {
 /* ============ Zdarzenia z sieci ============ */
 const room = (type, id) => `${type}:${id}`;
 const curKey = () => (state.current ? room(state.current.type, state.current.id) : null);
-function bump(key) {
-  if (key !== curKey() || document.hidden) state.unread[key] = (state.unread[key] || 0) + 1;
+function viewingKey() {
+  const g = curGroup();
+  if (g) { const v = viewOf(g); return v === "chat" ? `g:${g.id}` : `n:${g.id}:${v}`; }
+  return state.current && state.current.type === "dm" ? `d:${state.current.id}` : null;
+}
+function bump(ukey) {
+  if (ukey !== viewingKey() || document.hidden) state.unread[ukey] = (state.unread[ukey] || 0) + 1;
   ping();
+}
+function groupUnread(g) {
+  let n = state.unread[`g:${g.id}`] || 0;
+  for (const m of g.members) n += state.unread[`n:${g.id}:${m.id}`] || 0;
+  return n;
 }
 function cleanEntry(e) {
   if (!e || typeof e.id !== "string" || typeof e.x !== "string" || !e.x.trim()) return null;
@@ -402,7 +421,7 @@ function applyEvent(from, d) {
       const e = cleanEntry(d.e);
       if (!e) return;
       e.a = from;
-      if (addUnique((state.dms[from] ||= []), e)) { bump(room("dm", from)); save(); renderSoon(); }
+      if (addUnique((state.dms[from] ||= []), e)) { bump(`d:${from}`); save(); renderSoon(); }
       return;
     }
     case "gnew": {
@@ -413,41 +432,31 @@ function applyEvent(from, d) {
       members.forEach((m) => { if (!state.names[m.id]) state.names[m.id] = m.nick; });
       state.groups.unshift({
         id: g.id.slice(0, 24), name: String(g.name || "Grupka").slice(0, 40), emoji: String(g.emoji || "💬").slice(0, 8), members,
-        notebooks: (Array.isArray(g.nb) ? g.nb : []).slice(0, 20).map((n) => ({ id: String(n.id).slice(0, 24), name: String(n.name).slice(0, 40), entries: [] })),
-        messages: [],
+        notes: {}, messages: [],
       });
-      if (!state.groups[0].notebooks.length) state.groups[0].notebooks.push({ id: uid(), name: "Notatnik", entries: [] });
       toast(`${nameOf(from)} dodał(a) cię do grupki „${state.groups[0].name}”`);
       ping(); save(); renderSoon();
-      return;
-    }
-    case "nb": {
-      const g = groupOf(d.gid, from);
-      if (!g || !d.nb || typeof d.nb.id !== "string" || g.notebooks.some((n) => n.id === d.nb.id)) return;
-      g.notebooks.push({ id: d.nb.id.slice(0, 24), name: String(d.nb.name || "Notatnik").slice(0, 40), entries: [] });
-      save(); renderSoon();
       return;
     }
     case "note": {
       const g = groupOf(d.gid, from), e = cleanEntry(d.e);
       if (!g || !e) return;
-      let nb = g.notebooks.find((n) => n.id === d.nbid);
-      if (!nb) { nb = { id: String(d.nbid).slice(0, 24), name: String(d.nbn || "Notatnik").slice(0, 40), entries: [] }; g.notebooks.push(nb); }
       e.a = from; e.reactions = {};
-      if (addUnique(nb.entries, e)) { bump(room("group", g.id)); save(); renderSoon(); }
+      if (addUnique(((g.notes ||= {})[from] ||= []), e)) { bump(`n:${g.id}:${from}`); save(); renderSoon(); }
       return;
     }
     case "gmsg": {
       const g = groupOf(d.gid, from), e = cleanEntry(d.e);
       if (!g || !e) return;
       e.a = from;
-      if (addUnique(g.messages, e)) { bump(room("group", g.id)); save(); renderSoon(); }
+      if (addUnique(g.messages, e)) { bump(`g:${g.id}`); save(); renderSoon(); }
       return;
     }
     case "react": {
       const g = groupOf(d.gid, from);
-      const nb = g && g.notebooks.find((n) => n.id === d.nbid);
-      const e = nb && nb.entries.find((x) => x.id === d.eid);
+      const owner = typeof d.owner === "string" ? d.owner : "";
+      if (!g || !g.members.some((m) => m.id === owner)) return;
+      const e = ((g.notes || {})[owner] || []).find((x) => x.id === d.eid);
       if (!e || !REACTIONS.includes(d.emo)) return;
       const list = ((e.reactions ||= {})[d.emo] ||= []);
       const i = list.indexOf(from);
@@ -478,101 +487,58 @@ function renderSoon() {
 function curGroup() {
   return state.current && state.current.type === "group" ? state.groups.find((g) => g.id === state.current.id) : null;
 }
-function curNotebook(g) {
-  return g.notebooks.find((n) => n.id === state.notebook[g.id]) || g.notebooks[0];
+function viewOf(g) {
+  const v = state.view[g.id];
+  if (v === "chat" || (v && g.members.some((m) => m.id === v))) return v;
+  let best = null, ts = 0;
+  for (const m of g.members) {
+    const l = (g.notes || {})[m.id] || [];
+    if (l.length && l[l.length - 1].ts > ts) { ts = l[l.length - 1].ts; best = m.id; }
+  }
+  return best || meKey();
 }
-function lastActivity(g) {
-  return [...g.messages, ...g.notebooks.flatMap((n) => n.entries)].sort((a, b) => b.ts - a.ts)[0];
-}
+const plural = (n) => `${n} ${n === 1 ? "osoba" : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 > 20) ? "osoby" : "osób"}`;
 function render() {
   if (!state.me) return;
   document.documentElement.dataset.styl = state.theme;
-  renderSidebar();
+  if (!document.hidden) { const vk = viewingKey(); if (vk) delete state.unread[vk]; }
+  renderRail();
   renderMain();
-  const unread = Object.values(state.unread).reduce((a, b) => a + b, 0);
-  $("#menuDot").hidden = !(unread || state.requests.length);
 }
 
-function listItem({ av, name, preview, active, unread, dim, onClick, extra }) {
-  const li = h("li", { class: (active ? "active " : "") + (dim ? "dim" : "") });
-  li.append(av, h("div", { class: "info" }, h("div", { class: "name" }, name), h("div", { class: "preview" }, preview)));
-  if (unread) li.append(h("span", { class: "badge" }, unread));
-  if (extra) li.append(extra);
-  if (onClick) li.onclick = onClick;
-  return li;
+function railItem({ av, label, active, unread, dim, onClick }) {
+  const b = h("button", { class: "ri" + (active ? " active" : "") + (dim ? " dim" : "") }, av, h("span", { class: "lbl" }, label));
+  if (unread) b.append(h("span", { class: "badge" }, unread > 99 ? "99+" : unread));
+  if (onClick) b.onclick = onClick;
+  return b;
 }
-
-function renderSidebar() {
-  const q = $("#search").value.trim().toLowerCase();
-  const m = (n) => !q || n.toLowerCase().includes(q);
-  $("#meNick").textContent = state.me.nick;
-  const ma = $("#meAvatar"), [a, b] = pal(meKey());
-  ma.style.background = `linear-gradient(135deg,${a},${b})`;
-  ma.textContent = state.me.nick.slice(0, 1);
-
-  // prośby o dodanie
-  const rb = $("#requests");
-  rb.replaceChildren();
-  for (const r of state.requests) {
-    const yes = h("button", { class: "round yes", "aria-label": "Przyjmij", html: ic("check") });
-    const no = h("button", { class: "round no", "aria-label": "Odrzuć", html: ic("close") });
-    yes.onclick = () => {
-      becomeContacts(r.id, r.nick);
-      sendTo(r.id, { t: "facc", nick: state.me.nick });
-      save(); render();
-      toast(`${r.nick} jest teraz w twoich znajomych`);
-    };
-    no.onclick = () => { state.requests = state.requests.filter((x) => x.id !== r.id); save(); render(); };
-    rb.append(h("div", { class: "req" }, avatar(r.id, "sm"), h("div", { class: "txt" }, h("b", {}, r.nick), "chce być twoim znajomym"), no, yes));
-  }
-
-  // grupki
-  const gl = $("#groupList");
+function renderRail() {
+  const gl = $("#groupList"), cl = $("#chatList");
   gl.replaceChildren();
-  for (const g of state.groups.filter((g) => m(g.name))) {
-    const last = lastActivity(g);
-    gl.append(listItem({
-      av: h("span", { class: "avatar emoji" }, g.emoji),
-      name: g.name,
-      preview: last ? `${nameOf(last.a)}: ${last.x}` : `${g.members.length} osób`,
+  cl.replaceChildren();
+  for (const g of state.groups) {
+    gl.append(railItem({
+      av: h("span", { class: "avatar emoji" }, g.emoji), label: g.name, unread: groupUnread(g),
       active: state.current && state.current.type === "group" && state.current.id === g.id,
-      unread: state.unread[room("group", g.id)],
       onClick: () => openRoom({ type: "group", id: g.id }),
     }));
   }
-  if (!gl.children.length) gl.append(h("li", { class: "empty-li" }, q ? "Nic nie znaleziono" : "Brak grupek. Kliknij „nowa”."));
-
-  // czaty
-  const cl = $("#chatList");
-  cl.replaceChildren();
-  const dmKeys = Object.keys(state.dms).filter((id) => state.dms[id].length && m(nameOf(id)));
-  dmKeys.sort((x, y) => state.dms[y].at(-1).ts - state.dms[x].at(-1).ts);
-  for (const id of dmKeys) {
-    const last = state.dms[id].at(-1);
-    cl.append(listItem({
-      av: avatar(id), name: nameOf(id), preview: (last.a === meKey() ? "Ty: " : "") + last.x,
-      active: state.current && state.current.type === "dm" && state.current.id === id,
-      unread: state.unread[room("dm", id)],
-      onClick: () => openRoom({ type: "dm", id }),
+  if (!state.groups.length) gl.append(h("div", { class: "rail-hint" }, "brak"));
+  const friends = [...state.contacts].sort((x, y) => (online.has(y.id) - online.has(x.id)) || x.nick.localeCompare(y.nick));
+  for (const c of friends) {
+    cl.append(railItem({
+      av: avatar(c.id), label: c.nick, unread: state.unread[`d:${c.id}`],
+      active: state.current && state.current.type === "dm" && state.current.id === c.id,
+      onClick: () => openRoom({ type: "dm", id: c.id }),
     }));
   }
-  if (!cl.children.length) cl.append(h("li", { class: "empty-li" }, "Brak rozmów"));
-
-  // znajomi
-  const kl = $("#contactList");
-  kl.replaceChildren();
-  const friends = state.contacts.filter((c) => m(c.nick)).sort((x, y) => (online.has(y.id) - online.has(x.id)) || x.nick.localeCompare(y.nick));
-  for (const c of friends) {
-    const call = h("button", { class: "round call-btn", "aria-label": "Zadzwoń", html: ic("callface", "big") });
-    const vid = h("button", { class: "round cam-btn", "aria-label": "Wideo", html: ic("video") });
-    call.onclick = (e) => { e.stopPropagation(); startCall(c.id, "audio"); };
-    vid.onclick = (e) => { e.stopPropagation(); startCall(c.id, "video"); };
-    kl.append(listItem({ av: avatar(c.id), name: c.nick, preview: online.has(c.id) ? "online" : "offline", onClick: () => openRoom({ type: "dm", id: c.id }), extra: h("div", { class: "mini" }, call, vid) }));
-  }
-  for (const p of state.pending.filter((p) => m(p.nick))) {
-    kl.append(listItem({ av: avatar(p.id), name: p.nick, preview: "czeka na akceptację…", dim: true }));
-  }
-  if (!kl.children.length) kl.append(h("li", { class: "empty-li" }, q ? "Nic nie znaleziono" : "Dodaj kogoś po nicku"));
+  for (const p of state.pending) cl.append(railItem({ av: avatar(p.id), label: p.nick, dim: true }));
+  if (!cl.children.length) cl.append(h("div", { class: "rail-hint" }, "brak"));
+  const av = avatar(meKey());
+  av.classList.remove("on");
+  av.classList.add(netStatus === "online" ? "on" : netStatus === "error" ? "bad" : "wait");
+  $("#railMe").replaceChildren(av, h("span", { class: "lbl" }, state.me.nick));
+  $("#reqDot").hidden = !state.requests.length;
 }
 
 let lastFeedId = "";
@@ -582,17 +548,25 @@ function renderMain() {
   const dm = state.current && state.current.type === "dm" ? state.current.id : null;
   if (state.current && !g && !dm) state.current = null;
   const inRoom = !!(g || dm);
-  $("#tabs").hidden = !g;
-  $("#composer").hidden = !inRoom;
+  const me = meKey();
   $("#roomActions").hidden = !inRoom;
-  const nbBar = $("#notebookBar");
-  nbBar.replaceChildren();
+  const bar = $("#notebookBar");
+  bar.replaceChildren();
+  let view = null, canWrite = inRoom;
 
   if (g) {
+    view = viewOf(g);
+    const on = g.members.filter((x) => x.id !== me && online.has(x.id)).length;
     $("#roomName").textContent = `${g.emoji} ${g.name}`;
-    const on = g.members.filter((x) => x.id !== meKey() && online.has(x.id)).length;
-    $("#roomSub").textContent = `${g.members.length} osób · ${on} online`;
-    document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === state.tab));
+    $("#roomSub").textContent = `${plural(g.members.length)} · ${on} online`;
+    const chips = [["chat", "Czat", "chat", state.unread[`g:${g.id}`]], [me, "Mój notatnik", "notebook", state.unread[`n:${g.id}:${me}`]]];
+    for (const m of g.members) if (m.id !== me) chips.push([m.id, nameOf(m.id), "notebook", state.unread[`n:${g.id}:${m.id}`]]);
+    for (const [id, label, icon, n] of chips) {
+      const chip = h("button", { class: "chip" + (id === view ? " active" : "") }, h("span", { html: ic(icon) }), label, n ? h("span", { class: "badge" }, n) : null);
+      chip.onclick = () => { state.view[g.id] = id; forceScroll = true; save(); render(); };
+      bar.append(chip);
+    }
+    canWrite = view === "chat" || view === me;
   } else if (dm) {
     $("#roomName").textContent = nameOf(dm);
     $("#roomSub").textContent = online.has(dm) ? "online" : "offline";
@@ -601,26 +575,21 @@ function renderMain() {
     $("#roomSub").textContent = netStatus === "online" ? "jesteś online" : netStatus === "error" ? "brak połączenia z siecią" : "łączenie…";
   }
 
-  const notes = !!g && state.tab === "notes";
-  $("#input").placeholder = notes ? "Wpisz plotkę – grupka zobaczy od razu…" : "Napisz wiadomość…";
-  const feed = $("#feed");
-  const nb = notes ? curNotebook(g) : null;
-  if (notes) {
-    for (const n of g.notebooks) {
-      const chip = h("button", { class: "chip" + (n.id === nb.id ? " active" : "") }, n.name);
-      chip.onclick = () => { state.notebook[g.id] = n.id; save(); renderMain(); };
-      nbBar.append(chip);
-    }
-    nbBar.append(h("button", { class: "chip add", onclick: addNotebook }, "+ notatnik"));
-  }
+  $("#composer").hidden = !(inRoom && canWrite);
+  const ro = $("#readonly");
+  ro.hidden = !(g && !canWrite);
+  if (!ro.hidden) ro.textContent = `To notatnik: ${nameOf(view)}. Pisze w nim tylko on(a), a ty możesz reagować emoji.`;
+  $("#input").placeholder = g ? (view === "chat" ? "Napisz do grupki…" : "Zapisz coś w swoim notatniku…") : "Napisz wiadomość…";
 
-  const id = `${curKey()}|${state.tab}|${nb ? nb.id : ""}`;
+  const id = `${curKey()}|${view}`;
   if (id !== lastFeedId) { forceScroll = true; lastFeedId = id; }
+  const feed = $("#feed");
   const near = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 90;
   const top = feed.scrollTop;
   feed.replaceChildren();
+  const notes = g && view !== "chat";
   if (!inRoom) renderHome(feed);
-  else if (notes) renderNotes(feed, g, nb);
+  else if (notes) renderNotes(feed, g, view);
   else renderChat(feed, g ? g.messages : state.dms[dm] || [], !!g);
   if (!inRoom || notes) feed.scrollTop = forceScroll ? 0 : top;
   else feed.scrollTop = forceScroll || near ? feed.scrollHeight : top;
@@ -636,41 +605,41 @@ function renderHome(feed) {
   feed.append(h("div", { class: "home" },
     h("span", { html: `<svg class="ic face"><use href="#i-callface"/></svg>` }),
     h("h2", {}, `Cześć, ${state.me.nick}!`),
-    h("p", {}, "Tu masz wszystko w jednym miejscu: czat, wspólny notatnik i rozmowy."),
+    h("p", {}, "Czat, notatniki i rozmowy twojej ekipy w jednym miejscu."),
     h("div", { class: "steps" },
       step("1", "Dodaj znajomego", "wpisz jego nick", addFriend),
       step("2", "Zrób grupkę", "z kolegami z ekipy", addGroup),
-      step("3", "Piszcie w notatniku", "każdy widzi wpisy od razu", () => (state.groups[0] ? openRoom({ type: "group", id: state.groups[0].id }) : addGroup())),
+      step("3", "Piszcie w notatnikach", "każdy ma swój, wszyscy czytają", () => (state.groups[0] ? openRoom({ type: "group", id: state.groups[0].id }) : addGroup())),
     )));
 }
 
-function renderNotes(feed, g, nb) {
-  if (!nb.entries.length) {
-    feed.append(h("div", { class: "empty", html: ic("notebook") + `<p><b></b><br>Wpisz coś na dole. Cała grupka zobaczy to od razu.</p>` }));
-    feed.querySelector("b").textContent = `Notatnik „${nb.name}” jest pusty`;
+function renderNotes(feed, g, owner) {
+  const list = (g.notes || {})[owner] || [];
+  if (!list.length) {
+    const mine = owner === meKey();
+    feed.append(h("div", { class: "empty", html: ic("notebook") + "<p></p>" }));
+    feed.querySelector("p").textContent = mine ? "Twój notatnik jest pusty. Wpisz coś na dole, a grupka zobaczy to od razu." : `${nameOf(owner)} nic jeszcze nie zapisał(a).`;
     return;
   }
   const me = meKey();
-  for (const e of [...nb.entries].sort((x, y) => y.ts - x.ts)) {
+  for (const e of [...list].sort((x, y) => y.ts - x.ts)) {
     const reacts = h("div", { class: "reactions" });
     for (const emo of REACTIONS) {
       const users = (e.reactions && e.reactions[emo]) || [];
       const b = h("button", { class: "react" + (users.includes(me) ? " on" : "") }, users.length ? `${emo} ${users.length}` : emo);
       b.onclick = () => {
         e.reactions ||= {};
-        const list = (e.reactions[emo] ||= []);
-        const i = list.indexOf(me);
-        i < 0 ? list.push(me) : list.splice(i, 1);
+        const l = (e.reactions[emo] ||= []);
+        const i = l.indexOf(me);
+        i < 0 ? l.push(me) : l.splice(i, 1);
         save(); renderMain();
-        broadcast(g, { t: "react", gid: g.id, nbid: nb.id, eid: e.id, emo, on: i < 0 });
+        broadcast(g, { t: "react", gid: g.id, owner, eid: e.id, emo, on: i < 0 });
       };
       reacts.append(b);
     }
-    const mine = e.a === me;
-    feed.append(h("article", { class: "note" }, avatar(e.a),
-      h("div", { class: "note-body" },
-        h("div", { class: "note-head" }, h("span", { class: "note-author" }, mine ? "Ty" : nameOf(e.a)), h("span", { class: "note-time" }, time(e.ts))),
-        h("div", { class: "note-text" }, e.x), reacts)));
+    feed.append(h("article", { class: "note" },
+      h("div", { class: "note-head" }, h("span", { class: "note-time" }, time(e.ts))),
+      h("div", { class: "note-text" }, e.x), reacts));
   }
 }
 
@@ -694,28 +663,31 @@ function renderChat(feed, list, isGroup) {
 }
 
 /* ============ Akcje ============ */
+function pickView(g) {
+  for (const m of g.members) if (state.unread[`n:${g.id}:${m.id}`]) return m.id;
+  if (state.unread[`g:${g.id}`]) return "chat";
+  return viewOf(g);
+}
 function openRoom(r) {
   state.current = r;
-  delete state.unread[room(r.type, r.id)];
   if (r.type === "dm" && !state.dms[r.id]) state.dms[r.id] = [];
+  if (r.type === "group") { const g = curGroup(); if (g) state.view[g.id] = pickView(g); }
   forceScroll = true;
   save();
-  closeSidebar();
   render();
 }
 function send(text) {
   const g = curGroup();
   const e = { id: uid(), a: meKey(), x: text.slice(0, 2000), ts: now() };
-  if (g && state.tab === "notes") {
-    const nb = curNotebook(g);
-    nb.entries.push({ ...e, reactions: {} });
-    broadcast(g, { t: "note", gid: g.id, nbid: nb.id, nbn: nb.name, e: { id: e.id, x: e.x, ts: e.ts } });
-  } else if (g) {
-    g.messages.push(e);
-    broadcast(g, { t: "gmsg", gid: g.id, e: { id: e.id, x: e.x, ts: e.ts } });
+  const wire = { id: e.id, x: e.x, ts: e.ts };
+  if (g) {
+    const v = viewOf(g);
+    if (v === "chat") { g.messages.push(e); broadcast(g, { t: "gmsg", gid: g.id, e: wire }); }
+    else if (v === meKey()) { ((g.notes ||= {})[v] ||= []).push({ ...e, reactions: {} }); broadcast(g, { t: "note", gid: g.id, e: wire }); }
+    else return;
   } else if (state.current && state.current.type === "dm") {
     (state.dms[state.current.id] ||= []).push(e);
-    sendTo(state.current.id, { t: "dm", e: { id: e.id, x: e.x, ts: e.ts } });
+    sendTo(state.current.id, { t: "dm", e: wire });
   }
   forceScroll = true;
   save();
@@ -761,24 +733,41 @@ async function addGroup() {
   const g = {
     id: uid(), name: r.value, emoji: r.emoji,
     members: [{ id: meKey(), nick: state.me.nick }, ...r.picked.map((id) => ({ id, nick: nameOf(id) }))],
-    notebooks: [{ id: uid(), name: "Notatnik", entries: [] }], messages: [],
+    notes: {}, messages: [],
   };
   state.groups.unshift(g);
   save();
-  broadcast(g, { t: "gnew", g: { id: g.id, name: g.name, emoji: g.emoji, members: g.members, nb: g.notebooks.map((n) => ({ id: n.id, name: n.name })) } });
+  broadcast(g, { t: "gnew", g: { id: g.id, name: g.name, emoji: g.emoji, members: g.members } });
   openRoom({ type: "group", id: g.id });
 }
-async function addNotebook() {
-  const g = curGroup();
-  if (!g) return;
-  const r = await ask({ title: "Nowy notatnik", input: { placeholder: "np. Plotki z wycieczki", maxLength: 30 }, ok: "Utwórz" });
-  if (!r) return;
-  const nb = { id: uid(), name: r.value, entries: [] };
-  g.notebooks.push(nb);
-  state.notebook[g.id] = nb.id;
-  save(); render();
-  broadcast(g, { t: "nb", gid: g.id, nb: { id: nb.id, name: nb.name } });
+function acceptRequest(r) {
+  becomeContacts(r.id, r.nick);
+  sendTo(r.id, { t: "facc", nick: state.me.nick });
+  save(); render(); renderPlus();
+  toast(`${r.nick} jest teraz w twoich znajomych`);
 }
+function renderPlus() {
+  const box = $("#plusBody");
+  box.replaceChildren();
+  const btn = (icon, title, sub, fn) => h("button", { class: "menu-btn", onclick: fn }, h("span", { html: ic(icon) }), h("span", {}, title, h("small", {}, sub)));
+  box.append(
+    btn("userplus", "Dodaj znajomego", "wpisz jego nick", () => { closePlus(); addFriend(); }),
+    btn("users", "Stwórz grupkę", "czat i notatniki dla ekipy", () => { closePlus(); addGroup(); }),
+    btn("share", "Zaproś kogoś do Palety", `twój nick: ${state.me.nick}`, () => shareNick()),
+  );
+  if (state.requests.length) {
+    box.append(h("div", { class: "sec-h" }, "Zaproszenia do znajomych"));
+    for (const r of state.requests) {
+      const yes = h("button", { class: "round yes", "aria-label": "Przyjmij", html: ic("check") });
+      const no = h("button", { class: "round no", "aria-label": "Odrzuć", html: ic("close") });
+      yes.onclick = () => acceptRequest(r);
+      no.onclick = () => { state.requests = state.requests.filter((x) => x.id !== r.id); save(); render(); renderPlus(); };
+      box.append(h("div", { class: "req" }, avatar(r.id, "sm"), h("div", { class: "txt" }, h("b", {}, r.nick), "chce być twoim znajomym"), no, yes));
+    }
+  }
+}
+function openPlus() { renderPlus(); $("#plus").hidden = false; }
+function closePlus() { $("#plus").hidden = true; }
 async function shareNick() {
   const text = `Dodaj mnie w Paleta! Mój nick: ${state.me.nick}`;
   const url = location.origin + location.pathname;
@@ -994,8 +983,6 @@ function declineIncoming() {
 }
 
 /* ============ Panel, ustawienia, zdarzenia ============ */
-function openSidebar() { $("#sidebar").classList.add("open"); $("#backdrop").classList.add("show"); }
-function closeSidebar() { $("#sidebar").classList.remove("open"); $("#backdrop").classList.remove("show"); }
 function renderThemes() {
   const box = $("#themes");
   box.replaceChildren();
@@ -1006,16 +993,12 @@ function renderThemes() {
   }
 }
 function wireUI() {
-  $("#openSidebar").onclick = openSidebar;
-  $("#closeSidebar").onclick = closeSidebar;
-  $("#backdrop").onclick = closeSidebar;
-  $("#search").oninput = renderSidebar;
-  $("#addFriend").onclick = addFriend;
-  $("#addGroup").onclick = addGroup;
-  $("#shareNick").onclick = shareNick;
-  document.querySelectorAll(".tab").forEach((t) => (t.onclick = () => { state.tab = t.dataset.tab; save(); renderMain(); }));
+  $("#railAdd").onclick = openPlus;
+  $("#closePlus").onclick = closePlus;
+  $("#plus").onclick = (e) => { if (e.target.id === "plus") closePlus(); };
+  $("#railMe").onclick = () => $("#openSettings").click();
   document.querySelectorAll("[data-call]").forEach((b) => (b.onclick = () => callFromHeader(b.dataset.call)));
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) { $("#screenBtn").hidden = true; $("#cScreen").hidden = true; }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) $("#cScreen").hidden = true;
 
   $("#cMute").onclick = () => { if (!call) return; call.muted = !call.muted; call.stream.getAudioTracks().forEach((t) => (t.enabled = !call.muted)); updateCallUI(); };
   $("#cCam").onclick = toggleCam;
@@ -1060,7 +1043,6 @@ function wireUI() {
   };
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden && state.me) {
-      if (curKey()) delete state.unread[curKey()];
       sweep();
       renderSoon();
     }
