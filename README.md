@@ -1,4 +1,4 @@
-# Paleta
+# Plotkarki
 
 Aplikacja na telefon dla ekipy: grupki, czaty, wspólne notatniki, rozmowy głosowe i wideo, udostępnianie ekranu.
 
@@ -20,7 +20,7 @@ python3 -m http.server 8000
 Test na jednym komputerze: otwórz dwie karty w osobnych profilach/oknach prywatnych i załóż dwa nicki.
 
 ## Dzwonienie
-- Dzwonisz także do osób offline: jeśli mają włączony dzwonek (ntfy), dostają powiadomienie „dzwoni”, a po otwarciu Palety rozmowa łączy się sama.
+- Dzwonisz także do osób offline: jeśli mają włączony dzwonek (ntfy), dostają powiadomienie „dzwoni”, a po otwarciu Plotkarek rozmowa łączy się sama.
 - W czacie zostają wpisy o rozmowach: wychodzące, przychodzące, nieodebrane (z czasem trwania). Stuknięcie wpisu oddzwania.
 
 ## Ograniczenia

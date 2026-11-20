@@ -1,5 +1,5 @@
 "use strict";
-/* Paleta – czat ekipy: grupki, wspólne notatniki, rozmowy.
+/* Plotkarki – czat ekipy: grupki, wspólne notatniki, rozmowy.
    Telefony łączą się bezpośrednio (WebRTC przez PeerJS), nick = adres.
    Dane trzymane są na telefonie; wiadomości do osób offline czekają w kolejce. */
 
@@ -217,7 +217,7 @@ function ask(o) {
   });
 }
 
-/* ============ Powiadomienia, gdy Paleta jest zamknięta (ntfy.sh) ============ */
+/* ============ Powiadomienia, gdy Plotkarki są zamknięte (ntfy.sh) ============ */
 // Każdy ma swój tajny „temat” w ntfy. Znajomi dostają go przez bezpośrednie połączenie i wysyłają tam
 // krótkie powiadomienie: kto dzwoni / kto napisał. Treść wiadomości nigdy tam nie trafia.
 const NTFY = "https://ntfy.sh";
@@ -245,7 +245,7 @@ function pushTo(key, title, message, { urgent = false, every = 0 } = {}) {
   }).catch(() => {});
   return true;
 }
-const away = new Set(); // znajomi połączeni, ale z Paletą w tle
+const away = new Set(); // znajomi połączeni, ale z Plotkarkami w tle
 function needsPush(key) { return !online.has(key) || away.has(key); }
 function helloMsg() { return { t: "hello", nick: state.me.nick, push: state.pushOn ? ensureTopic() : null, h: document.hidden }; }
 function sayHelloAll() { for (const c of conns.values()) if (c.open) { try { c.send(helloMsg()); } catch {} } }
@@ -306,7 +306,7 @@ function onPeerError(err) {
       connecting.delete(key);
       if (online.delete(key)) renderSoon();
       if (call && call.peers.has(key) && !call.peers.get(key).connected) {
-        if (call.outgoing && state.push[key]) { // zamknął Paletę przed chwilą – czekamy, aż otworzy ją z powiadomienia
+        if (call.outgoing && state.push[key]) { // zamknął Plotkarki przed chwilą – czekamy, aż je otworzy z powiadomienia
           const p = call.peers.get(key);
           call.peers.delete(key);
           try { p.mc.close(); } catch {}
@@ -678,7 +678,7 @@ function renderMain() {
     $("#roomSub").textContent = tw ? "pisze…" : online.has(dm) ? "online" : lastSeenText(dm);
     $("#roomSub").classList.toggle("typing", tw);
   } else {
-    $("#roomName").textContent = "Paleta";
+    $("#roomName").textContent = "Plotkarki";
     $("#roomSub").classList.remove("typing");
     $("#roomSub").textContent = netStatus === "online" ? "jesteś online" : netStatus === "error" ? "brak połączenia z siecią" : "łączenie…";
   }
@@ -704,7 +704,7 @@ function renderMain() {
 function renderHome(feed) {
   const btn = (icon, label, fn) => h("button", { onclick: fn }, h("span", { html: ic(icon) }), label);
   feed.append(h("div", { class: "home" },
-    h("span", { html: `<svg class="ic face"><use href="#i-callface"/></svg>` }),
+    h("span", { html: `<svg class="ic face"><use href="#i-logo"/></svg>` }),
     h("h2", {}, `Cześć, ${state.me.nick}`),
     h("p", {}, "Wybierz grupkę albo znajomego po lewej. Jeśli nikogo jeszcze nie masz, zacznij tutaj:"),
     h("div", { class: "home-btns" }, btn("userplus", "Dodaj znajomego", addFriend), btn("users", "Stwórz grupkę", addGroup))));
@@ -831,11 +831,11 @@ function send(text) {
     else if (v === meKey()) { ((g.notes ||= {})[v] ||= []).push({ ...e, reactions: {} }); broadcast(g, { t: "note", gid: g.id, e: wire }); }
     else return;
     const what = v === "chat" ? `napisał(a) w „${g.name}”` : `dodał(a) wpis do notatnika w „${g.name}”`;
-    for (const m of g.members) if (m.id !== meKey() && needsPush(m.id)) pushTo(m.id, "💬 Paleta", `${state.me.nick} ${what}`, { every: 60000 });
+    for (const m of g.members) if (m.id !== meKey() && needsPush(m.id)) pushTo(m.id, "💬 Plotkarki", `${state.me.nick} ${what}`, { every: 60000 });
   } else if (state.current && state.current.type === "dm") {
     (state.dms[state.current.id] ||= []).push(e);
     sendTo(state.current.id, { t: "dm", e: wire });
-    if (needsPush(state.current.id)) pushTo(state.current.id, "💬 Paleta", `${state.me.nick} napisał(a) do ciebie`, { every: 60000 });
+    if (needsPush(state.current.id)) pushTo(state.current.id, "💬 Plotkarki", `${state.me.nick} napisał(a) do ciebie`, { every: 60000 });
   }
   forceScroll = true;
   save();
@@ -1021,24 +1021,24 @@ function renderSettings() {
   cb.checked = state.sound;
   cb.onchange = () => { state.sound = cb.checked; save(); };
   body.append(h("div", { class: "box" }, h("div", { class: "box-h" }, "Powiadomienia"),
-    row({ icon: "phone", label: "Dzwonek, gdy Paleta jest zamknięta", sub: state.pushOn ? "włączony · przez aplikację ntfy" : "wyłączony · stuknij, żeby włączyć", onClick: setupPush, trail: h("span", { class: "pill-state" + (state.pushOn ? " on" : "") }, state.pushOn ? "WŁ." : "WYŁ.") }),
+    row({ icon: "phone", label: "Dzwonek, gdy Plotkarki są zamknięte", sub: state.pushOn ? "włączony · przez aplikację ntfy" : "wyłączony · stuknij, żeby włączyć", onClick: setupPush, trail: h("span", { class: "pill-state" + (state.pushOn ? " on" : "") }, state.pushOn ? "WŁ." : "WYŁ.") }),
     row({ icon: "bell", label: "Dźwięki w aplikacji", sub: "dzwonek i nowe wiadomości", trail: sw })));
   body.append(h("div", { class: "box" },
     row({ icon: "share", label: "Zaproś znajomych", sub: `twój nick: ${state.me.nick}`, onClick: shareNick }),
     row({ icon: "logout", label: "Wyloguj", sub: "usuwa dane z tego telefonu", danger: true, onClick: logout })));
-  body.append(h("p", { class: "foot" }, "Paleta · wiadomości i rozmowy idą bezpośrednio między telefonami"));
+  body.append(h("p", { class: "foot" }, "Plotkarki · wiadomości i rozmowy idą bezpośrednio między telefonami"));
 }
 function setupPush() {
   const topic = ensureTopic();
   const body = h("div", {});
   const link = (cls, href, icon, title, sub) => h("a", { class: "menu-btn " + cls, href, target: "_blank", rel: "noopener" }, h("span", { html: ic(icon) }), h("span", {}, title, h("small", {}, sub)));
   body.append(
-    h("p", { class: "ask-text" }, "Żeby telefon dzwonił i pokazywał nowe wiadomości, nawet gdy Paleta jest zamknięta, potrzebna jest darmowa aplikacja ntfy. To ona dostarcza powiadomienia."),
+    h("p", { class: "ask-text" }, "Żeby telefon dzwonił i pokazywał nowe wiadomości, nawet gdy Plotkarki są zamknięte, potrzebna jest darmowa aplikacja ntfy. To ona dostarcza powiadomienia."),
     h("div", { class: "steps2" },
       /iPhone|iPad|iPod/.test(navigator.userAgent)
         ? link("", "https://apps.apple.com/app/ntfy/id1625396347", "bell", "1. Zainstaluj ntfy", "App Store, za darmo")
         : link("", "https://play.google.com/store/apps/details?id=io.heckel.ntfy", "bell", "1. Zainstaluj ntfy", "Sklep Google Play, za darmo"),
-      link("", `ntfy://ntfy.sh/${topic}`, "check", "2. Połącz z Paletą", "otworzy ntfy i doda twój kanał"),
+      link("", `ntfy://ntfy.sh/${topic}`, "check", "2. Połącz z Plotkarkami", "otworzy ntfy i doda twój kanał"),
     ),
     h("p", { class: "ask-text small" }, "Jeśli „Połącz” nic nie robi: w ntfy stuknij +, wpisz poniższą nazwę i zapisz."),
     h("div", { class: "nick-row topic" }, h("code", {}, topic), h("button", { class: "link", type: "button", html: ic("copy") + "kopiuj", onclick: async () => { try { await navigator.clipboard.writeText(topic); toast("Skopiowano"); } catch { toast(topic); } } })),
@@ -1046,7 +1046,7 @@ function setupPush() {
   );
   const test = h("button", { class: "primary", type: "button" }, state.pushOn ? "Wyślij próbne powiadomienie" : "3. Sprawdź i włącz");
   test.onclick = () => {
-    fetch(NTFY + "/", { method: "POST", body: JSON.stringify({ topic, title: "📞 Paleta", message: "Działa! Tak będzie wyglądał dzwonek od znajomych.", priority: 5, tags: ["telephone_receiver"], click: appUrl() }) }).catch(() => {});
+    fetch(NTFY + "/", { method: "POST", body: JSON.stringify({ topic, title: "📞 Plotkarki", message: "Działa! Tak będzie wyglądał dzwonek od znajomych.", priority: 5, tags: ["telephone_receiver"], click: appUrl() }) }).catch(() => {});
     state.pushOn = true;
     save();
     sayHelloAll();
@@ -1055,11 +1055,11 @@ function setupPush() {
   };
   body.append(test);
   if (state.pushOn) {
-    const off = h("button", { class: "ghost-danger", type: "button" }, "Wyłącz dzwonek przy zamkniętej Palecie");
+    const off = h("button", { class: "ghost-danger", type: "button" }, "Wyłącz dzwonek przy zamkniętych Plotkarkach");
     off.onclick = () => { state.pushOn = false; save(); sayHelloAll(); renderSettings(); closeSheet(); toast("Wyłączono"); };
     body.append(off);
   }
-  openSheet("Dzwonek przy zamkniętej Palecie", body);
+  openSheet("Dzwonek przy zamkniętych Plotkarkach", body);
 }
 function openSheet(title, node) { $("#sheetTitle").textContent = title; $("#sheetBody").replaceChildren(node); $("#sheet").hidden = false; }
 function closeSheet() { $("#sheet").hidden = true; }
@@ -1079,16 +1079,16 @@ function renderPlus() {
   box.append(
     btn("userplus", "Dodaj znajomego", "po nicku, od razu", () => { closePlus(); addFriend(); }),
     btn("users", "Nowa grupka", "możesz dodać kilka osób naraz", () => { closePlus(); addGroup(); }),
-    btn("share", "Zaproś kogoś do Palety", `twój nick: ${state.me.nick}`, () => shareNick()),
+    btn("share", "Zaproś kogoś do Plotkarek", `twój nick: ${state.me.nick}`, () => shareNick()),
   );
 }
 function openPlus() { renderPlus(); $("#plus").hidden = false; }
 function closePlus() { $("#plus").hidden = true; }
 async function shareNick() {
-  const text = `Dodaj mnie w Paleta! Mój nick: ${state.me.nick}`;
+  const text = `Dodaj mnie w Plotkarkach! Mój nick: ${state.me.nick}`;
   const url = location.origin + location.pathname;
   if (navigator.share) {
-    try { await navigator.share({ title: "Paleta", text, url }); return; } catch (e) { if (e.name === "AbortError") return; }
+    try { await navigator.share({ title: "Plotkarki", text, url }); return; } catch (e) { if (e.name === "AbortError") return; }
   }
   try { await navigator.clipboard.writeText(`${text}\n${url}`); toast("Zaproszenie skopiowane"); } catch { toast(text); }
 }
@@ -1102,7 +1102,7 @@ function callFromHeader(mode) {
 /* ============ Rozmowy (1:1 i grupowe) ============ */
 // Rozmowa grupowa to siatka połączeń: każdy łączy się z każdym. Kto dołącza, wysyła „cjoin”,
 // a osoby już w rozmowie dzwonią do niego (ta z „mniejszym” nickiem, żeby nie było podwójnych połączeń).
-// Do osób offline (albo z zablokowanym telefonem) idzie powiadomienie przez ntfy; gdy otworzą Paletę, połączenie dochodzi samo.
+// Do osób offline (albo z zablokowanym telefonem) idzie powiadomienie przez ntfy; gdy otworzą Plotkarki, połączenie dochodzi samo.
 let call = null, incoming = null;
 const lv = () => $("#localVideo");
 const tileEls = new Map();
@@ -1199,7 +1199,7 @@ async function startCall(keys, mode, gid) {
   for (const x of waiting) c.waiting.add(x);
   openCallUI();
   ringback(true);
-  c.wait = setInterval(() => { // czekamy, aż powiadomieni otworzą Paletę
+  c.wait = setInterval(() => { // czekamy, aż powiadomieni otworzą Plotkarki
     if (call !== c) return clearInterval(c.wait);
     for (const x of [...c.waiting]) {
       if (online.has(x)) { c.waiting.delete(x); placeCall(x, false); }
@@ -1344,10 +1344,10 @@ function endCall(reason, notify) {
   ringback(false);
   for (const [key, p] of c.peers) {
     try { p.mc.close(); } catch {}
-    // jeszcze nieodebrane: wiadomość czeka w kolejce, bo ta osoba mogła właśnie zamknąć Paletę
+    // jeszcze nieodebrane: wiadomość czeka w kolejce, bo ta osoba mogła właśnie zamknąć Plotkarki
     if (notify) (p.connected ? sendEphemeral : sendTo)(key, { t: "cend", cid: c.id });
   }
-  if (notify) for (const key of c.waiting) sendTo(key, { t: "cend", cid: c.id }); // dojdzie, gdy otworzy Paletę
+  if (notify) for (const key of c.waiting) sendTo(key, { t: "cend", cid: c.id }); // dojdzie, gdy otworzy Plotkarki
   c.stream.getTracks().forEach((t) => t.stop());
   c.vtrack.stop();
   if (c.blank) c.blank.stop();
@@ -1537,7 +1537,7 @@ function showWelcome() {
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 // Sprawdzanie aktualizacji: przy powrocie do aplikacji i co 5 minut. Nowa wersja = automatyczne przeładowanie
 // (dane są zapisane w telefonie, więc nic nie ginie). Nie przeładowujemy w trakcie rozmowy ani pisania.
-const APP_VERSION = 10;
+const APP_VERSION = 11;
 async function checkUpdate() {
   try {
     const r = await fetch("version.json?t=" + Date.now(), { cache: "no-store" });
