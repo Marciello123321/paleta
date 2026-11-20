@@ -1309,6 +1309,18 @@ function showWelcome() {
 }
 
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+// Sprawdzanie aktualizacji: przy powrocie do aplikacji i co 5 minut. Nowa wersja = automatyczne przeładowanie
+// (dane są zapisane w telefonie, więc nic nie ginie). Nie przeładowujemy w trakcie rozmowy ani pisania.
+const APP_VERSION = 8;
+async function checkUpdate() {
+  try {
+    const r = await fetch("version.json?t=" + Date.now(), { cache: "no-store" });
+    const { v } = await r.json();
+    if (v > APP_VERSION && !call && !incoming && !$("#input").value.trim()) location.reload();
+  } catch {}
+}
+setInterval(checkUpdate, 5 * 60 * 1000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) checkUpdate(); });
 wireUI();
 if (typeof Peer === "undefined") {
   document.body.append(h("p", { style: "padding:24px;color:#fff" }, "Nie udało się wczytać biblioteki sieciowej. Odśwież stronę."));
