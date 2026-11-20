@@ -8,12 +8,12 @@ const PREFIX = "paleta-app-v1-";
 const NICK_RE = /^[A-Za-z0-9_]{3,16}$/;
 const KEY_RE = /^[a-z0-9_]{3,16}$/;
 const THEMES = [
-  { id: "noc", name: "Noc", sw: "linear-gradient(135deg,#0d0b14 50%,#8b5cf6 50%)" },
-  { id: "dzien", name: "Dzień", sw: "linear-gradient(135deg,#f4f2fb 50%,#7c3aed 50%)" },
-  { id: "neon", name: "Neon", sw: "linear-gradient(135deg,#05080a 50%,#00e0a0 50%)" },
-  { id: "pastel", name: "Pastel", sw: "linear-gradient(135deg,#fff3f1 50%,#ec4899 50%)" },
-  { id: "ocean", name: "Ocean", sw: "linear-gradient(135deg,#08131f 50%,#38bdf8 50%)" },
-  { id: "zachod", name: "Zachód", sw: "linear-gradient(135deg,#170d12 50%,#fb923c 50%)" },
+  { id: "noc", name: "Noc", sw: "linear-gradient(135deg,#111b21 50%,#00a884 50%)" },
+  { id: "dzien", name: "Dzień", sw: "linear-gradient(135deg,#efeae2 50%,#008069 50%)" },
+  { id: "fiolet", name: "Fiolet", sw: "linear-gradient(135deg,#14121c 50%,#8b5cf6 50%)" },
+  { id: "pastel", name: "Pastel", sw: "linear-gradient(135deg,#fffaf9 50%,#e0457b 50%)" },
+  { id: "ocean", name: "Ocean", sw: "linear-gradient(135deg,#0c1622 50%,#3aa6f0 50%)" },
+  { id: "zachod", name: "Zachód", sw: "linear-gradient(135deg,#1a1012 50%,#f97316 50%)" },
 ];
 const GROUP_EMOJI = ["🔥", "🎮", "⚽", "🎧", "🍕", "😈", "👻", "🌴"];
 const REACTIONS = ["😂", "😱", "🔥", "👀"];
@@ -66,6 +66,7 @@ function migrate(s) {
     }
   }
   s.view ||= {};
+  if (!THEMES.some((t) => t.id === s.theme)) s.theme = s.theme === "neon" ? "fiolet" : "noc";
   return s;
 }
 let state = load();
@@ -87,10 +88,17 @@ function pal(key) {
   return PAL[x % PAL.length];
 }
 function avatar(key, cls = "") {
-  const [a, b] = pal(key);
   const el = h("span", { class: `avatar ${cls} ${online.has(key) ? "on" : ""}` }, nameOf(key).slice(0, 1));
-  el.style.background = `linear-gradient(135deg,${a},${b})`;
+  el.style.background = pal(key)[0];
   return el;
+}
+const hm = (ts) => new Date(ts).toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" });
+function dayLabel(ts) {
+  const d = new Date(ts).toDateString(), t = new Date(), y = new Date(t);
+  y.setDate(t.getDate() - 1);
+  if (d === t.toDateString()) return "Dzisiaj";
+  if (d === y.toDateString()) return "Wczoraj";
+  return new Date(ts).toLocaleDateString("pl-PL", { day: "numeric", month: "long" });
 }
 function time(ts) {
   const d = new Date(ts);
@@ -372,7 +380,7 @@ function onData(from, d, conn) {
   if (d.t === "ack") {
     const q = state.outbox[from];
     const i = q ? q.findIndex((e) => e.m === d.m) : -1;
-    if (i >= 0) { q.splice(i, 1); if (!q.length) delete state.outbox[from]; save(); }
+    if (i >= 0) { q.splice(i, 1); if (!q.length) delete state.outbox[from]; save(); renderSoon(); }
     return;
   }
   if (typeof d.m === "string" && d.m.length <= 24) { try { conn.send({ t: "ack", m: d.m }); } catch {} }
@@ -502,6 +510,8 @@ function render() {
   if (!state.me) return;
   document.documentElement.dataset.styl = state.theme;
   if (!document.hidden) { const vk = viewingKey(); if (vk) delete state.unread[vk]; }
+  const head = getComputedStyle(document.documentElement).getPropertyValue("--head").trim();
+  if (head) document.querySelector('meta[name="theme-color"]').content = head;
   renderRail();
   renderMain();
 }
@@ -554,10 +564,12 @@ function renderMain() {
   bar.replaceChildren();
   let view = null, canWrite = inRoom;
 
+  const roomAv = $("#roomAv");
+  roomAv.replaceChildren(g ? h("span", { class: "avatar emoji" }, g.emoji) : dm ? avatar(dm) : h("span", { html: ic("logo") }));
   if (g) {
     view = viewOf(g);
     const on = g.members.filter((x) => x.id !== me && online.has(x.id)).length;
-    $("#roomName").textContent = `${g.emoji} ${g.name}`;
+    $("#roomName").textContent = g.name;
     $("#roomSub").textContent = `${plural(g.members.length)} · ${on} online`;
     const chips = [["chat", "Czat", "chat", state.unread[`g:${g.id}`]], [me, "Mój notatnik", "notebook", state.unread[`n:${g.id}:${me}`]]];
     for (const m of g.members) if (m.id !== me) chips.push([m.id, nameOf(m.id), "notebook", state.unread[`n:${g.id}:${m.id}`]]);
@@ -576,9 +588,6 @@ function renderMain() {
   }
 
   $("#composer").hidden = !(inRoom && canWrite);
-  const ro = $("#readonly");
-  ro.hidden = !(g && !canWrite);
-  if (!ro.hidden) ro.textContent = `To notatnik: ${nameOf(view)}. Pisze w nim tylko on(a), a ty możesz reagować emoji.`;
   $("#input").placeholder = g ? (view === "chat" ? "Napisz do grupki…" : "Zapisz coś w swoim notatniku…") : "Napisz wiadomość…";
 
   const id = `${curKey()}|${view}`;
@@ -591,56 +600,93 @@ function renderMain() {
   if (!inRoom) renderHome(feed);
   else if (notes) renderNotes(feed, g, view);
   else renderChat(feed, g ? g.messages : state.dms[dm] || [], !!g);
-  if (!inRoom || notes) feed.scrollTop = forceScroll ? 0 : top;
+  if (!inRoom) feed.scrollTop = 0;
   else feed.scrollTop = forceScroll || near ? feed.scrollHeight : top;
   forceScroll = false;
 }
 
 function renderHome(feed) {
-  const step = (n, title, sub, fn) => {
-    const b = h("button", { class: "step" }, h("span", { class: "n" }, n), h("span", {}, title, h("small", {}, sub)));
-    b.onclick = fn;
-    return b;
-  };
+  const btn = (icon, label, fn) => h("button", { onclick: fn }, h("span", { html: ic(icon) }), label);
   feed.append(h("div", { class: "home" },
     h("span", { html: `<svg class="ic face"><use href="#i-callface"/></svg>` }),
-    h("h2", {}, `Cześć, ${state.me.nick}!`),
-    h("p", {}, "Czat, notatniki i rozmowy twojej ekipy w jednym miejscu."),
-    h("div", { class: "steps" },
-      step("1", "Dodaj znajomego", "wpisz jego nick", addFriend),
-      step("2", "Zrób grupkę", "z kolegami z ekipy", addGroup),
-      step("3", "Piszcie w notatnikach", "każdy ma swój, wszyscy czytają", () => (state.groups[0] ? openRoom({ type: "group", id: state.groups[0].id }) : addGroup())),
-    )));
+    h("h2", {}, `Cześć, ${state.me.nick}`),
+    h("p", {}, "Wybierz grupkę albo znajomego po lewej. Jeśli nikogo jeszcze nie masz, zacznij tutaj:"),
+    h("div", { class: "home-btns" }, btn("userplus", "Dodaj znajomego", addFriend), btn("users", "Stwórz grupkę", addGroup))));
 }
 
+function pendingIds() {
+  const ids = new Set();
+  for (const q of Object.values(state.outbox)) for (const ev of q) if (ev.e && ev.e.id) ids.add(ev.e.id);
+  return ids;
+}
+function meta(ts, mine, pending) {
+  const m = h("span", { class: "meta" }, hm(ts));
+  if (mine) m.append(h("span", { class: pending ? "" : "done", html: ic(pending ? "tick" : "ticks"), title: pending ? "czeka na wysłanie" : "dostarczone" }));
+  return m;
+}
+// Wiadomości i wpisy w stylu dymków: daty między dniami, ogonek przy pierwszym dymku danej osoby
+function bubbles(feed, list, { isGroup, note, onTap }) {
+  const me = meKey(), pend = pendingIds();
+  let day = "", prev = null;
+  for (const m of list) {
+    const d = dayLabel(m.ts);
+    if (d !== day) { feed.append(h("div", { class: "day" }, d)); day = d; prev = null; }
+    const mine = m.a === me, cont = prev === m.a;
+    prev = m.a;
+    const b = h("div", { class: "msg" + (mine ? " mine" : "") + (cont ? " cont" : "") + (note ? " note" : "") });
+    if (isGroup && !mine && !cont) {
+      const who = h("div", { class: "who" }, nameOf(m.a));
+      who.style.color = pal(m.a)[0];
+      b.append(who);
+    }
+    b.append(h("span", { class: "txt" }, m.x), meta(m.ts, mine, pend.has(m.id)));
+    if (onTap) onTap(b, m);
+    feed.append(b);
+  }
+}
+
+let picking = null;
+document.addEventListener("click", (e) => { if (picking && !e.target.closest(".msg.note")) { picking = null; renderMain(); } });
 function renderNotes(feed, g, owner) {
   const list = (g.notes || {})[owner] || [];
+  const me = meKey(), mine = owner === me;
+  feed.append(h("div", { class: "notice" }, mine
+    ? "To twój notatnik. Wszyscy z grupki widzą, co tu zapiszesz."
+    : `Notatnik: ${nameOf(owner)}. Pisze tu tylko ${nameOf(owner)}. Stuknij wpis, żeby zareagować.`));
   if (!list.length) {
-    const mine = owner === meKey();
     feed.append(h("div", { class: "empty", html: ic("notebook") + "<p></p>" }));
-    feed.querySelector("p").textContent = mine ? "Twój notatnik jest pusty. Wpisz coś na dole, a grupka zobaczy to od razu." : `${nameOf(owner)} nic jeszcze nie zapisał(a).`;
+    feed.querySelector(".empty p").textContent = mine ? "Pusto. Zapisz coś na dole." : `${nameOf(owner)} nic jeszcze nie zapisał(a).`;
     return;
   }
+  bubbles(feed, list, {
+    isGroup: false, note: true,
+    onTap: (b, e) => {
+      const counts = REACTIONS.map((emo) => [emo, ((e.reactions || {})[emo] || []).length]).filter(([, n]) => n);
+      if (counts.length) {
+        b.classList.add("has-rx");
+        b.append(h("span", { class: "rx" }, counts.map(([emo, n]) => (n > 1 ? `${emo}${n}` : emo)).join(" ")));
+      }
+      if (picking === e.id) {
+        const bar = h("div", { class: "picker" });
+        for (const emo of REACTIONS) {
+          const on = ((e.reactions || {})[emo] || []).includes(me);
+          bar.append(h("button", { class: on ? "on" : "", "aria-label": `Reakcja ${emo}`, onclick: (ev) => { ev.stopPropagation(); react(g, owner, e, emo); } }, emo));
+        }
+        b.append(bar);
+      }
+      b.onclick = (ev) => { ev.stopPropagation(); picking = picking === e.id ? null : e.id; renderMain(); };
+    },
+  });
+}
+function react(g, owner, e, emo) {
   const me = meKey();
-  for (const e of [...list].sort((x, y) => y.ts - x.ts)) {
-    const reacts = h("div", { class: "reactions" });
-    for (const emo of REACTIONS) {
-      const users = (e.reactions && e.reactions[emo]) || [];
-      const b = h("button", { class: "react" + (users.includes(me) ? " on" : "") }, users.length ? `${emo} ${users.length}` : emo);
-      b.onclick = () => {
-        e.reactions ||= {};
-        const l = (e.reactions[emo] ||= []);
-        const i = l.indexOf(me);
-        i < 0 ? l.push(me) : l.splice(i, 1);
-        save(); renderMain();
-        broadcast(g, { t: "react", gid: g.id, owner, eid: e.id, emo, on: i < 0 });
-      };
-      reacts.append(b);
-    }
-    feed.append(h("article", { class: "note" },
-      h("div", { class: "note-head" }, h("span", { class: "note-time" }, time(e.ts))),
-      h("div", { class: "note-text" }, e.x), reacts));
-  }
+  e.reactions ||= {};
+  const l = (e.reactions[emo] ||= []);
+  const i = l.indexOf(me);
+  i < 0 ? l.push(me) : l.splice(i, 1);
+  picking = null;
+  save(); renderMain();
+  broadcast(g, { t: "react", gid: g.id, owner, eid: e.id, emo, on: i < 0 });
 }
 
 function renderChat(feed, list, isGroup) {
@@ -648,18 +694,7 @@ function renderChat(feed, list, isGroup) {
     feed.append(h("div", { class: "empty", html: ic("chat") + "<p>Jeszcze cicho. Napisz pierwszy!</p>" }));
     return;
   }
-  const me = meKey();
-  for (const m of list) {
-    const mine = m.a === me;
-    const wrap = h("div", { class: "msg" + (mine ? " mine" : "") });
-    if (!mine && isGroup) {
-      const who = h("div", { class: "who" }, nameOf(m.a));
-      who.style.color = pal(m.a)[0];
-      wrap.append(who);
-    }
-    wrap.append(h("div", { class: "bubble" }, m.x), h("div", { class: "time" }, time(m.ts)));
-    feed.append(wrap);
-  }
+  bubbles(feed, list, { isGroup });
 }
 
 /* ============ Akcje ============ */
