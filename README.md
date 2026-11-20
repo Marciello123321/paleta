@@ -19,8 +19,12 @@ python3 -m http.server 8000
 ```
 Test na jednym komputerze: otwórz dwie karty w osobnych profilach/oknach prywatnych i załóż dwa nicki.
 
+## Dzwonienie
+- Dzwonisz także do osób offline: jeśli mają włączony dzwonek (ntfy), dostają powiadomienie „dzwoni”, a po otwarciu Palety rozmowa łączy się sama.
+- W czacie zostają wpisy o rozmowach: wychodzące, przychodzące, nieodebrane (z czasem trwania). Stuknięcie wpisu oddzwania.
+
 ## Ograniczenia
 - Dane są tylko na telefonie (localStorage). Wylogowanie = utrata historii.
 - Gdy obie strony są za restrykcyjną siecią komórkową, rozmowa może się nie połączyć (korzysta z darmowych serwerów STUN/TURN).
 - Udostępnianie ekranu z telefonu z poziomu przeglądarki zwykle nie działa. Oglądać cudzy ekran można zawsze.
-- Powiadomienia, gdy aplikacja jest zamknięta, wymagałyby własnego serwera.
+- Dzwonek i powiadomienia przy zamkniętej aplikacji idą przez darmową aplikację ntfy (ntfy.sh). Każdy włącza to raz w Ustawieniach. Powiadomienia zawierają tylko nick i nazwę grupki, nigdy treść.

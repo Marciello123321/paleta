@@ -17,6 +17,7 @@ const THEMES = [
 ];
 const GROUP_EMOJI = ["🔥", "🎮", "⚽", "🎧", "🍕", "😈", "👻", "🌴"];
 const REACTIONS = ["😂", "😱", "🔥", "👀"];
+const EMOJI_PANEL = ["😂", "🤣", "😭", "😍", "🥰", "😘", "😎", "🤔", "😏", "🙄", "😱", "😳", "🥺", "😡", "🤫", "💀", "👀", "🔥", "❤️", "💔", "👍", "👎", "🙏", "👏", "🎉", "💯", "🍕", "⚽"];
 const PAL = [["#8b5cf6", "#ec4899"], ["#f59e0b", "#ef4444"], ["#10b981", "#06b6d4"], ["#3b82f6", "#8b5cf6"], ["#ec4899", "#f59e0b"], ["#14b8a6", "#84cc16"], ["#6366f1", "#22d3ee"], ["#f43f5e", "#fb923c"]];
 const ICE = [
   { urls: "stun:stun.l.google.com:19302" },
@@ -46,7 +47,7 @@ const ic = (n, c = "") => `<svg class="ic ${c}" aria-hidden="true"><use href="#i
 
 /* ============ Stan ============ */
 function fresh() {
-  return { v: 2, me: null, theme: "noc", sound: true, contacts: [], requests: [], pending: [], names: {}, groups: [], dms: {}, outbox: {}, current: null, view: {}, unread: {} };
+  return { v: 2, me: null, theme: "noc", sound: true, contacts: [], requests: [], pending: [], names: {}, groups: [], dms: {}, outbox: {}, current: null, view: {}, unread: {}, push: {}, lastSeen: {}, pushTopic: null, pushOn: false };
 }
 function load() {
   try {
@@ -66,6 +67,8 @@ function migrate(s) {
     }
   }
   s.view ||= {};
+  s.push ||= {};
+  s.lastSeen ||= {};
   for (const p of [...(s.pending || []), ...(s.requests || [])]) {
     if (!s.contacts.some((c) => c.id === p.id)) s.contacts.push({ id: p.id, nick: p.nick });
   }
@@ -214,6 +217,39 @@ function ask(o) {
   });
 }
 
+/* ============ Powiadomienia, gdy Paleta jest zamknięta (ntfy.sh) ============ */
+// Każdy ma swój tajny „temat” w ntfy. Znajomi dostają go przez bezpośrednie połączenie i wysyłają tam
+// krótkie powiadomienie: kto dzwoni / kto napisał. Treść wiadomości nigdy tam nie trafia.
+const NTFY = "https://ntfy.sh";
+const PUSH_RE = /^paleta-[a-z0-9_]{3,16}-[a-z0-9]{12,24}$/;
+const appUrl = () => location.origin + location.pathname;
+const lastPush = new Map();
+function ensureTopic() {
+  if (state.me && (!state.pushTopic || !PUSH_RE.test(state.pushTopic))) {
+    const r = Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => "abcdefghijklmnopqrstuvwxyz0123456789"[b % 36]).join("");
+    state.pushTopic = `paleta-${meKey()}-${r}`;
+    save();
+  }
+  return state.pushTopic;
+}
+function pushTo(key, title, message, { urgent = false, every = 0 } = {}) {
+  const topic = state.push[key];
+  if (!topic || !PUSH_RE.test(topic)) return false;
+  if (every) {
+    if (now() - (lastPush.get(key) || 0) < every) return true;
+    lastPush.set(key, now());
+  }
+  fetch(NTFY + "/", {
+    method: "POST",
+    body: JSON.stringify({ topic, title, message, priority: urgent ? 5 : 3, tags: [urgent ? "telephone_receiver" : "speech_balloon"], click: appUrl() }),
+  }).catch(() => {});
+  return true;
+}
+const away = new Set(); // znajomi połączeni, ale z Paletą w tle
+function needsPush(key) { return !online.has(key) || away.has(key); }
+function helloMsg() { return { t: "hello", nick: state.me.nick, push: state.pushOn ? ensureTopic() : null, h: document.hidden }; }
+function sayHelloAll() { for (const c of conns.values()) if (c.open) { try { c.send(helloMsg()); } catch {} } }
+
 /* ============ Sieć (PeerJS) ============ */
 let peer = null, peerOpen = false, loopT = null;
 const conns = new Map();
@@ -269,7 +305,15 @@ function onPeerError(err) {
     if (key) {
       connecting.delete(key);
       if (online.delete(key)) renderSoon();
-      if (call && call.peers.has(key) && !call.peers.get(key).connected) removePeer(key);
+      if (call && call.peers.has(key) && !call.peers.get(key).connected) {
+        if (call.outgoing && state.push[key]) { // zamknął Paletę przed chwilą – czekamy, aż otworzy ją z powiadomienia
+          const p = call.peers.get(key);
+          call.peers.delete(key);
+          try { p.mc.close(); } catch {}
+          call.waiting.add(key);
+          renderTiles(); tick();
+        } else removePeer(key);
+      }
     }
   } else if (["network", "server-error", "socket-error", "socket-closed"].includes(err.type)) {
     setNet("connecting");
@@ -301,13 +345,13 @@ function setupConn(conn) {
     conns.set(rk, conn);
     connecting.delete(rk);
     online.add(rk);
-    try { conn.send({ t: "hello", nick: state.me.nick }); } catch {}
+    try { conn.send(helloMsg()); } catch {}
     flush(rk);
     renderSoon();
   });
   conn.on("data", (d) => onData(rk, d, conn));
   conn.on("close", () => {
-    if (conns.get(rk) === conn) { conns.delete(rk); online.delete(rk); renderSoon(); }
+    if (conns.get(rk) === conn) { conns.delete(rk); online.delete(rk); away.delete(rk); state.lastSeen[rk] = now(); save(); renderSoon(); }
   });
   conn.on("error", () => {});
 }
@@ -406,6 +450,9 @@ function onData(from, d, conn) {
     case "hello":
       if (known && typeof d.nick === "string" && NICK_RE.test(d.nick) && k(d.nick) === from) {
         state.names[from] = d.nick;
+        if (typeof d.push === "string" && PUSH_RE.test(d.push)) state.push[from] = d.push;
+        else if (d.push === null) delete state.push[from];
+        if (d.h) away.add(from); else away.delete(from);
         const c = state.contacts.find((c) => c.id === from);
         if (c) c.nick = d.nick;
         save(); renderSoon();
@@ -432,6 +479,7 @@ function applyEvent(from, d) {
       const e = cleanEntry(d.e);
       if (!e) return;
       e.a = from;
+      typing.delete(`d:${from}|${from}`);
       if (addUnique((state.dms[from] ||= []), e)) { bump(`d:${from}`); save(); renderSoon(); }
       return;
     }
@@ -474,6 +522,7 @@ function applyEvent(from, d) {
       const g = groupOf(d.gid, from), e = cleanEntry(d.e);
       if (!g || !e) return;
       e.a = from;
+      typing.delete(`g:${g.id}|${from}`);
       if (addUnique(g.messages, e)) { bump(`g:${g.id}`); save(); renderSoon(); }
       return;
     }
@@ -490,13 +539,48 @@ function applyEvent(from, d) {
       save(); renderSoon();
       return;
     }
-    case "cmode": case "cend": case "cjoin":
+    case "typing": {
+      const roomKey = d.gid ? (groupOf(d.gid, from) ? `g:${d.gid}` : null) : `d:${from}`;
+      if (!roomKey) return;
+      typing.set(`${roomKey}|${from}`, now() + 4500);
+      renderSoon();
+      setTimeout(renderSoon, 4600);
+      return;
+    }
+    case "vis":
+      if (d.h) away.add(from); else away.delete(from);
+      return;
+    case "cmode": case "cend": case "cjoin": case "cmiss":
       onCallEvent(from, d);
       return;
   }
 }
 
 /* ============ Rysowanie ============ */
+const typing = new Map();
+function typers(roomKey) {
+  const out = [];
+  for (const [key, until] of typing) {
+    if (until < now()) { typing.delete(key); continue; }
+    const [rk, who] = key.split("|");
+    if (rk === roomKey) out.push(who);
+  }
+  return out;
+}
+function lastSeenText(key) {
+  const ts = state.lastSeen[key];
+  if (!ts) return "offline";
+  const d = dayLabel(ts);
+  return `ostatnio online ${d === "Dzisiaj" ? "dziś" : d === "Wczoraj" ? "wczoraj" : d} o ${hm(ts)}`;
+}
+let lastTyping = 0;
+function sendTyping() {
+  if (now() - lastTyping < 2500) return;
+  lastTyping = now();
+  const g = curGroup();
+  const to = g ? g.members.map((m) => m.id).filter((x) => x !== meKey()) : state.current && state.current.type === "dm" ? [state.current.id] : [];
+  for (const key of to) { const c = conns.get(key); if (c && c.open) { try { c.send({ t: "typing", gid: g ? g.id : undefined }); } catch {} } }
+}
 let rq = 0;
 function renderSoon() {
   if (rq) return;
@@ -574,7 +658,9 @@ function renderMain() {
     view = viewOf(g);
     const on = g.members.filter((x) => x.id !== me && online.has(x.id)).length;
     $("#roomName").textContent = g.name;
-    $("#roomSub").textContent = `${plural(g.members.length)} · ${on} online`;
+    const tw = typers(`g:${g.id}`);
+    $("#roomSub").textContent = tw.length ? `${tw.map(nameOf).join(", ")} ${tw.length > 1 ? "piszą" : "pisze"}…` : `${plural(g.members.length)} · ${on} online`;
+    $("#roomSub").classList.toggle("typing", tw.length > 0);
     const chips = [["chat", "Czat", "chat", state.unread[`g:${g.id}`]], [me, "Mój notatnik", "notebook", state.unread[`n:${g.id}:${me}`]]];
     for (const m of g.members) if (m.id !== me) chips.push([m.id, nameOf(m.id), "notebook", state.unread[`n:${g.id}:${m.id}`]]);
     for (const [id, label, icon, n] of chips) {
@@ -588,9 +674,12 @@ function renderMain() {
     if (act && (act.offsetLeft < bar.scrollLeft || act.offsetLeft + act.offsetWidth > bar.scrollLeft + bar.clientWidth)) bar.scrollLeft = act.offsetLeft - 12;
   } else if (dm) {
     $("#roomName").textContent = nameOf(dm);
-    $("#roomSub").textContent = online.has(dm) ? "online" : "offline";
+    const tw = typers(`d:${dm}`).length > 0;
+    $("#roomSub").textContent = tw ? "pisze…" : online.has(dm) ? "online" : lastSeenText(dm);
+    $("#roomSub").classList.toggle("typing", tw);
   } else {
     $("#roomName").textContent = "Paleta";
+    $("#roomSub").classList.remove("typing");
     $("#roomSub").textContent = netStatus === "online" ? "jesteś online" : netStatus === "error" ? "brak połączenia z siecią" : "łączenie…";
   }
 
@@ -621,6 +710,18 @@ function renderHome(feed) {
     h("div", { class: "home-btns" }, btn("userplus", "Dodaj znajomego", addFriend), btn("users", "Stwórz grupkę", addGroup))));
 }
 
+function callBubble(m, mine) {
+  const c = m.c, video = c.mode === "video";
+  const label = c.group
+    ? c.missed ? "Nieodebrana rozmowa grupowa" : "Rozmowa grupowa"
+    : c.missed ? (mine ? "Nikt nie odebrał" : "Nieodebrane połączenie")
+    : `${mine ? "Wychodzące" : "Przychodzące"} ${video ? "wideo" : "połączenie"}`;
+  const b = h("button", { class: "msg call-log" + (mine ? " mine" : "") + (c.missed ? " missed" : ""), title: "Zadzwoń ponownie" },
+    h("span", { class: "cl-ic", html: ic(video ? "video" : "phone") }),
+    h("span", { class: "cl-t" }, label, h("small", {}, (c.dur ? `${fmtDur(c.dur)} · ` : "") + hm(m.ts))));
+  b.onclick = () => callFromHeader(video ? "video" : "audio");
+  return b;
+}
 function pendingIds() {
   const ids = new Set();
   for (const q of Object.values(state.outbox)) for (const ev of q) if (ev.e && ev.e.id) ids.add(ev.e.id);
@@ -640,6 +741,7 @@ function bubbles(feed, list, { isGroup, note, onTap }) {
     if (d !== day) { feed.append(h("div", { class: "day" }, d)); day = d; prev = null; }
     const mine = m.a === me, cont = prev === m.a;
     prev = m.a;
+    if (m.c) { feed.append(callBubble(m, mine)); prev = null; continue; }
     const b = h("div", { class: "msg" + (mine ? " mine" : "") + (cont ? " cont" : "") + (note ? " note" : "") });
     if (isGroup && !mine && !cont) {
       const who = h("div", { class: "who" }, nameOf(m.a));
@@ -711,6 +813,8 @@ function pickView(g) {
 }
 function openRoom(r) {
   state.current = r;
+  $("#emojiPanel").hidden = true;
+  $("#emojiBtn").classList.remove("on");
   if (r.type === "dm" && !state.dms[r.id]) state.dms[r.id] = [];
   if (r.type === "group") { const g = curGroup(); if (g) state.view[g.id] = pickView(g); }
   forceScroll = true;
@@ -726,9 +830,12 @@ function send(text) {
     if (v === "chat") { g.messages.push(e); broadcast(g, { t: "gmsg", gid: g.id, e: wire }); }
     else if (v === meKey()) { ((g.notes ||= {})[v] ||= []).push({ ...e, reactions: {} }); broadcast(g, { t: "note", gid: g.id, e: wire }); }
     else return;
+    const what = v === "chat" ? `napisał(a) w „${g.name}”` : `dodał(a) wpis do notatnika w „${g.name}”`;
+    for (const m of g.members) if (m.id !== meKey() && needsPush(m.id)) pushTo(m.id, "💬 Paleta", `${state.me.nick} ${what}`, { every: 60000 });
   } else if (state.current && state.current.type === "dm") {
     (state.dms[state.current.id] ||= []).push(e);
     sendTo(state.current.id, { t: "dm", e: wire });
+    if (needsPush(state.current.id)) pushTo(state.current.id, "💬 Paleta", `${state.me.nick} napisał(a) do ciebie`, { every: 60000 });
   }
   forceScroll = true;
   save();
@@ -913,12 +1020,49 @@ function renderSettings() {
   const cb = sw.querySelector("input");
   cb.checked = state.sound;
   cb.onchange = () => { state.sound = cb.checked; save(); };
-  body.append(h("div", { class: "box" }, h("div", { class: "box-h" }, "Powiadomienia"), row({ icon: "bell", label: "Dźwięki", sub: "dzwonek i nowe wiadomości", trail: sw })));
+  body.append(h("div", { class: "box" }, h("div", { class: "box-h" }, "Powiadomienia"),
+    row({ icon: "phone", label: "Dzwonek, gdy Paleta jest zamknięta", sub: state.pushOn ? "włączony · przez aplikację ntfy" : "wyłączony · stuknij, żeby włączyć", onClick: setupPush, trail: h("span", { class: "pill-state" + (state.pushOn ? " on" : "") }, state.pushOn ? "WŁ." : "WYŁ.") }),
+    row({ icon: "bell", label: "Dźwięki w aplikacji", sub: "dzwonek i nowe wiadomości", trail: sw })));
   body.append(h("div", { class: "box" },
     row({ icon: "share", label: "Zaproś znajomych", sub: `twój nick: ${state.me.nick}`, onClick: shareNick }),
     row({ icon: "logout", label: "Wyloguj", sub: "usuwa dane z tego telefonu", danger: true, onClick: logout })));
   body.append(h("p", { class: "foot" }, "Paleta · wiadomości i rozmowy idą bezpośrednio między telefonami"));
 }
+function setupPush() {
+  const topic = ensureTopic();
+  const body = h("div", {});
+  const link = (cls, href, icon, title, sub) => h("a", { class: "menu-btn " + cls, href, target: "_blank", rel: "noopener" }, h("span", { html: ic(icon) }), h("span", {}, title, h("small", {}, sub)));
+  body.append(
+    h("p", { class: "ask-text" }, "Żeby telefon dzwonił i pokazywał nowe wiadomości, nawet gdy Paleta jest zamknięta, potrzebna jest darmowa aplikacja ntfy. To ona dostarcza powiadomienia."),
+    h("div", { class: "steps2" },
+      /iPhone|iPad|iPod/.test(navigator.userAgent)
+        ? link("", "https://apps.apple.com/app/ntfy/id1625396347", "bell", "1. Zainstaluj ntfy", "App Store, za darmo")
+        : link("", "https://play.google.com/store/apps/details?id=io.heckel.ntfy", "bell", "1. Zainstaluj ntfy", "Sklep Google Play, za darmo"),
+      link("", `ntfy://ntfy.sh/${topic}`, "check", "2. Połącz z Paletą", "otworzy ntfy i doda twój kanał"),
+    ),
+    h("p", { class: "ask-text small" }, "Jeśli „Połącz” nic nie robi: w ntfy stuknij +, wpisz poniższą nazwę i zapisz."),
+    h("div", { class: "nick-row topic" }, h("code", {}, topic), h("button", { class: "link", type: "button", html: ic("copy") + "kopiuj", onclick: async () => { try { await navigator.clipboard.writeText(topic); toast("Skopiowano"); } catch { toast(topic); } } })),
+    h("p", { class: "ask-text small" }, "Powiadomienia idą przez publiczny serwer ntfy.sh i zawierają tylko nick i nazwę grupki, nigdy treść wiadomości."),
+  );
+  const test = h("button", { class: "primary", type: "button" }, state.pushOn ? "Wyślij próbne powiadomienie" : "3. Sprawdź i włącz");
+  test.onclick = () => {
+    fetch(NTFY + "/", { method: "POST", body: JSON.stringify({ topic, title: "📞 Paleta", message: "Działa! Tak będzie wyglądał dzwonek od znajomych.", priority: 5, tags: ["telephone_receiver"], click: appUrl() }) }).catch(() => {});
+    state.pushOn = true;
+    save();
+    sayHelloAll();
+    renderSettings();
+    toast("Wysłano. Jeśli przyszło powiadomienie, wszystko gotowe.");
+  };
+  body.append(test);
+  if (state.pushOn) {
+    const off = h("button", { class: "ghost-danger", type: "button" }, "Wyłącz dzwonek przy zamkniętej Palecie");
+    off.onclick = () => { state.pushOn = false; save(); sayHelloAll(); renderSettings(); closeSheet(); toast("Wyłączono"); };
+    body.append(off);
+  }
+  openSheet("Dzwonek przy zamkniętej Palecie", body);
+}
+function openSheet(title, node) { $("#sheetTitle").textContent = title; $("#sheetBody").replaceChildren(node); $("#sheet").hidden = false; }
+function closeSheet() { $("#sheet").hidden = true; }
 function openSettings() { renderSettings(); openPage("#settings"); }
 async function copyNick() { try { await navigator.clipboard.writeText(state.me.nick); toast("Nick skopiowany"); } catch { toast(state.me.nick); } }
 async function logout() {
@@ -958,10 +1102,22 @@ function callFromHeader(mode) {
 /* ============ Rozmowy (1:1 i grupowe) ============ */
 // Rozmowa grupowa to siatka połączeń: każdy łączy się z każdym. Kto dołącza, wysyła „cjoin”,
 // a osoby już w rozmowie dzwonią do niego (ta z „mniejszym” nickiem, żeby nie było podwójnych połączeń).
+// Do osób offline (albo z zablokowanym telefonem) idzie powiadomienie przez ntfy; gdy otworzą Paletę, połączenie dochodzi samo.
 let call = null, incoming = null;
 const lv = () => $("#localVideo");
 const tileEls = new Map();
 const allowed = (key) => isContact(key) || state.groups.some((g) => g.members.some((m) => m.id === key));
+const fmtDur = (ms) => { const s = Math.round(ms / 1000); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; };
+
+let rbTimer = null;
+function ringback(on) { // sygnał „tuuu… tuuu…” u dzwoniącego
+  clearInterval(rbTimer);
+  rbTimer = null;
+  if (!on) return;
+  const beep = () => tone([[425, 0, 1.1]]);
+  beep();
+  rbTimer = setInterval(beep, 4000);
+}
 
 function blankTrack() {
   const c = document.createElement("canvas");
@@ -997,13 +1153,25 @@ async function getLocal(mode, facing, hd = true) {
   stream.addTrack(vtrack);
   return { stream, vtrack, blank, mode: m, warn };
 }
-function newCall(id, gid, L, first, outgoing) {
-  return { id, gid, first, outgoing, stream: L.stream, vtrack: L.vtrack, blank: L.blank, mode: L.mode, facing: "user", muted: false, peers: new Map(), start: 0 };
+function newCall(id, gid, L, first, outgoing, mode0) {
+  return { id, gid, first, outgoing, mode0: mode0 === "video" ? "video" : "audio", created: now(), stream: L.stream, vtrack: L.vtrack, blank: L.blank, mode: L.mode, facing: "user", muted: false, peers: new Map(), waiting: new Set(), start: 0 };
 }
 function callTitle() {
   if (!call) return "";
   const g = call.gid && state.groups.find((x) => x.id === call.gid);
   return g ? g.name : nameOf(call.first);
+}
+
+// Wpis o rozmowie w czacie (jak w WhatsAppie): wychodzące, przychodzące, nieodebrane, z czasem trwania
+function logCall({ cid, gid, key, author, mode, dur, missed, ts }) {
+  const g = gid && state.groups.find((x) => x.id === gid);
+  const list = g ? g.messages : key ? (state.dms[key] ||= []) : null;
+  if (!list) return;
+  const e = { id: `call-${cid}`.slice(0, 24), a: author, x: "", ts: ts || now(), c: { mode, dur: dur || 0, missed: !!missed, group: !!g } };
+  if (addUnique(list, e)) {
+    if (missed && author !== meKey()) bump(g ? `g:${g.id}` : `d:${key}`);
+    save(); renderSoon();
+  }
 }
 
 async function startCall(keys, mode, gid) {
@@ -1012,27 +1180,43 @@ async function startCall(keys, mode, gid) {
   if (!navigator.mediaDevices || !window.RTCPeerConnection) return toast("Ta przeglądarka nie obsługuje rozmów");
   keys = keys.filter((x) => x !== meKey() && allowed(x));
   if (!keys.length) return toast("Nie ma do kogo zadzwonić");
+  const g = gid && state.groups.find((x) => x.id === gid);
   toast(gid ? "Dzwonię do grupki…" : "Łączę…");
-  const ok = await Promise.all(keys.map((x) => ensureOnline(x, 3000)));
+  const ok = await Promise.all(keys.map((x) => ensureOnline(x, 2500)));
   const targets = keys.filter((_, i) => ok[i]);
-  if (!targets.length) return toast(gid ? "Nikogo z grupki nie ma teraz online" : `${nameOf(keys[0])} jest teraz offline`);
+  // powiadomienie „dzwoni” dostają wszyscy z włączonymi powiadomieniami – także ci z zablokowanym telefonem
+  const text = g ? `${state.me.nick} dzwoni do grupki „${g.name}”` : `${state.me.nick} dzwoni do ciebie`;
+  const pushed = keys.filter((x) => pushTo(x, mode === "video" ? "📹 Rozmowa wideo" : "📞 Połączenie", `${text}. Stuknij, żeby odebrać.`, { urgent: true }));
+  const waiting = pushed.filter((x) => !targets.includes(x));
+  if (!targets.length && !waiting.length) {
+    return toast(gid ? "Nikogo z grupki nie ma online i nikt nie ma włączonych powiadomień" : `${nameOf(keys[0])} jest offline i nie ma włączonych powiadomień`);
+  }
   const L = await getLocal(mode, "user", !gid);
   if (call || incoming) { L.stream.getTracks().forEach((t) => t.stop()); return; }
   if (L.warn) toast(L.warn);
-  call = newCall(uid(), gid || null, L, targets[0], true);
+  const c = (call = newCall(uid(), gid || null, L, targets[0] || waiting[0], true, mode));
   for (const x of targets) placeCall(x, false);
+  for (const x of waiting) c.waiting.add(x);
   openCallUI();
-  const c = call;
+  ringback(true);
+  c.wait = setInterval(() => { // czekamy, aż powiadomieni otworzą Paletę
+    if (call !== c) return clearInterval(c.wait);
+    for (const x of [...c.waiting]) {
+      if (online.has(x)) { c.waiting.delete(x); placeCall(x, false); }
+      else connectTo(x);
+    }
+  }, 1500);
   c.ring = setTimeout(() => {
     if (call !== c) return;
+    c.waiting.clear();
     for (const [x, p] of [...c.peers]) if (!p.connected) { c.peers.delete(x); try { p.mc.close(); } catch {} sendEphemeral(x, { t: "cend", cid: c.id }); }
-    if (!c.peers.size) endCall(gid ? "Nikt nie odebrał" : `${nameOf(targets[0])} nie odbiera`, false);
+    if (!c.peers.size) endCall(gid ? "Nikt nie odebrał" : `${nameOf(c.first)} nie odbiera`, false);
     else renderTiles();
-  }, 30000);
+  }, waiting.length ? 50000 : 35000);
 }
 function placeCall(key, mesh) {
   try {
-    const mc = peer.call(PREFIX + key, call.stream, { metadata: { mode: call.mode, cid: call.id, gid: call.gid, mesh } });
+    const mc = peer.call(PREFIX + key, call.stream, { metadata: { mode: call.mode, cid: call.id, gid: call.gid, mesh, ts: now() } });
     addPeer(key, mc, "audio");
   } catch {}
 }
@@ -1043,7 +1227,7 @@ function addPeer(key, mc, mode) {
     if (call !== c || c.peers.get(key) !== p) return;
     p.stream = rs;
     p.connected = true;
-    if (!c.start) { c.start = now(); clearTimeout(c.ring); c.timer = setInterval(tick, 1000); }
+    if (!c.start) { c.start = now(); clearTimeout(c.ring); ringback(false); c.timer = setInterval(tick, 1000); }
     renderTiles();
     tick();
   });
@@ -1057,17 +1241,18 @@ function removePeer(key) {
   if (!p) return;
   call.peers.delete(key);
   try { p.mc.close(); } catch {}
-  if (!call.peers.size) endCall(call.start ? "Rozmowa zakończona" : call.gid ? "Nikt nie odebrał" : `${nameOf(key)} nie może teraz rozmawiać`, false);
+  if (!call.peers.size && !call.waiting.size) endCall(call.start ? "Rozmowa zakończona" : call.gid ? "Nikt nie odebrał" : `${nameOf(key)} nie może teraz rozmawiać`, false);
   else { if (p.connected) toast(`${nameOf(key)} się rozłączył(a)`); renderTiles(); tick(); }
 }
 function tick() {
   if (!call) return;
   const st = $("#callStatus");
-  if (!call.start) { st.textContent = call.outgoing ? "Dzwonię…" : "Łączenie…"; return; }
-  const s = Math.floor((now() - call.start) / 1000);
-  const clock = `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+  if (!call.start) {
+    st.textContent = !call.outgoing ? "Łączenie…" : call.waiting.size && !call.peers.size ? "Dzwonię… · wysłano powiadomienie" : "Dzwonię…";
+    return;
+  }
   const n = [...call.peers.values()].filter((p) => p.connected).length + 1;
-  st.textContent = call.gid ? `${plural(n)} · ${clock}` : clock;
+  st.textContent = call.gid ? `${plural(n)} · ${fmtDur(now() - call.start)}` : fmtDur(now() - call.start);
 }
 function openCallUI() {
   $("#callName").textContent = callTitle();
@@ -1080,8 +1265,10 @@ function openCallUI() {
 function renderTiles() {
   if (!call) return;
   const box = $("#tiles");
-  for (const [key, el] of tileEls) if (!call.peers.has(key)) { el.remove(); tileEls.delete(key); }
-  for (const [key, p] of call.peers) {
+  const keys = [...call.peers.keys(), ...[...call.waiting].filter((x) => !call.peers.has(x))];
+  for (const [key, el] of tileEls) if (!keys.includes(key)) { el.remove(); tileEls.delete(key); }
+  for (const key of keys) {
+    const p = call.peers.get(key);
     let el = tileEls.get(key);
     if (!el) {
       const v = h("video", { autoplay: "", playsinline: "" });
@@ -1090,11 +1277,11 @@ function renderTiles() {
       box.append(el);
     }
     const v = el.querySelector("video");
-    if (p.stream && v.srcObject !== p.stream) { v.srcObject = p.stream; v.play().catch(() => {}); }
-    el.classList.toggle("audio", !p.connected || p.mode === "audio");
-    el.querySelector(".tstat").textContent = p.connected ? "" : "dzwoni…";
+    if (p && p.stream && v.srcObject !== p.stream) { v.srcObject = p.stream; v.play().catch(() => {}); }
+    el.classList.toggle("audio", !p || !p.connected || p.mode === "audio");
+    el.querySelector(".tstat").textContent = !p ? "powiadomiono…" : p.connected ? "" : "dzwoni…";
   }
-  box.dataset.n = String(Math.max(1, Math.min(call.peers.size, 4)));
+  box.dataset.n = String(Math.max(1, Math.min(keys.length, 4)));
   $("#callName").textContent = callTitle();
 }
 function updateCallUI() {
@@ -1103,7 +1290,6 @@ function updateCallUI() {
   lv().classList.toggle("screen", call.mode === "screen");
   $("#cMute").classList.toggle("off", call.muted);
   $("#cMute use").setAttribute("href", call.muted ? "#i-micoff" : "#i-mic");
-
   $("#cCam use").setAttribute("href", call.mode === "video" ? "#i-video" : "#i-camoff");
   $("#cFlip").hidden = call.mode !== "video";
   $("#cScreen").classList.toggle("act", call.mode === "screen");
@@ -1153,11 +1339,15 @@ function endCall(reason, notify) {
   const c = call;
   call = null;
   clearInterval(c.timer);
+  clearInterval(c.wait);
   clearTimeout(c.ring);
+  ringback(false);
   for (const [key, p] of c.peers) {
     try { p.mc.close(); } catch {}
-    if (notify) sendEphemeral(key, { t: "cend", cid: c.id });
+    // jeszcze nieodebrane: wiadomość czeka w kolejce, bo ta osoba mogła właśnie zamknąć Paletę
+    if (notify) (p.connected ? sendEphemeral : sendTo)(key, { t: "cend", cid: c.id });
   }
+  if (notify) for (const key of c.waiting) sendTo(key, { t: "cend", cid: c.id }); // dojdzie, gdy otworzy Paletę
   c.stream.getTracks().forEach((t) => t.stop());
   c.vtrack.stop();
   if (c.blank) c.blank.stop();
@@ -1165,6 +1355,9 @@ function endCall(reason, notify) {
   tileEls.clear();
   lv().srcObject = null;
   $("#call").hidden = true;
+  const dur = c.start ? now() - c.start : 0;
+  logCall({ cid: c.id, gid: c.gid, key: c.gid ? null : c.first, author: c.outgoing ? meKey() : c.first, mode: c.mode0, dur, missed: !c.start, ts: c.created });
+  if (c.outgoing && !c.start && !c.gid) sendTo(c.first, { t: "cmiss", cid: c.id, mode: c.mode0, ts: c.created });
   if (reason) toast(reason);
 }
 function onIncomingCall(mc) {
@@ -1180,22 +1373,31 @@ function onIncomingCall(mc) {
     sendEphemeral(from, { t: "cmode", mode: call.mode, cid: call.id });
     return;
   }
-  if (call || incoming) { try { mc.close(); } catch {} return; }
+  if (call || incoming || (md.ts && now() - md.ts > 60000)) { try { mc.close(); } catch {} return; }
   const g = md.gid ? state.groups.find((x) => x.id === md.gid && x.members.some((m) => m.id === from)) : null;
-  incoming = { mc, from, mode, cid: typeof md.cid === "string" ? md.cid.slice(0, 24) : uid(), gid: g ? g.id : null };
+  incoming = { mc, from, mode, cid: typeof md.cid === "string" ? md.cid.slice(0, 24) : uid(), gid: g ? g.id : null, ts: now() };
   $("#incAvatar").replaceChildren(g ? h("span", { class: "avatar emoji" }, g.emoji) : avatar(from));
   $("#incName").textContent = g ? g.name : nameOf(from);
   $("#incSub").textContent = g
     ? `${nameOf(from)} zaprasza do rozmowy ${mode === "video" ? "wideo" : "grupowej"}…`
-    : { audio: "dzwoni do ciebie…", video: "dzwoni wideo…", screen: "chce ci pokazać ekran…" }[mode];
+    : { audio: "Połączenie głosowe…", video: "Połączenie wideo…", screen: "Chce ci pokazać ekran…" }[mode];
   $("#incoming").hidden = false;
   ring(true);
-  mc.on("close", () => { if (incoming && incoming.mc === mc) { dropIncoming(); toast(`Nieodebrane połączenie od ${nameOf(from)}`); } });
+  mc.on("close", () => { if (incoming && incoming.mc === mc) missIncoming(); });
+  incoming.timer = setTimeout(() => { if (incoming && incoming.mc === mc) { try { mc.close(); } catch {} missIncoming(); } }, 45000);
 }
 function dropIncoming() {
+  if (incoming) clearTimeout(incoming.timer);
   incoming = null;
   $("#incoming").hidden = true;
   ring(false);
+}
+function missIncoming() {
+  const inc = incoming;
+  if (!inc) return;
+  dropIncoming();
+  logCall({ cid: inc.cid, gid: inc.gid, key: inc.gid ? null : inc.from, author: inc.from, mode: inc.mode === "video" ? "video" : "audio", missed: true, ts: inc.ts });
+  toast(`Nieodebrane połączenie od ${nameOf(inc.from)}`);
 }
 async function acceptIncoming() {
   const inc = incoming;
@@ -1204,7 +1406,8 @@ async function acceptIncoming() {
   const L = await getLocal(inc.mode === "video" ? "video" : "audio", "user", !inc.gid);
   if (call) { L.stream.getTracks().forEach((t) => t.stop()); return; }
   if (L.warn) toast(L.warn);
-  call = newCall(inc.cid, inc.gid, L, inc.from, false);
+  call = newCall(inc.cid, inc.gid, L, inc.from, false, inc.mode);
+  call.created = inc.ts;
   inc.mc.answer(L.stream);
   addPeer(inc.from, inc.mc, inc.mode);
   openCallUI();
@@ -1217,21 +1420,27 @@ async function acceptIncoming() {
 function declineIncoming() {
   const inc = incoming;
   if (!inc) return;
-  dropIncoming();
   try { inc.mc.close(); } catch {}
   sendEphemeral(inc.from, { t: "cend", cid: inc.cid });
+  missIncoming();
 }
 function onCallEvent(from, d) {
   if (d.t === "cmode") {
     const p = call && call.peers.get(from);
     if (p && ["audio", "video", "screen"].includes(d.mode)) { p.mode = d.mode; renderTiles(); }
   } else if (d.t === "cend") {
-    if (call && call.peers.has(from) && (!d.cid || d.cid === call.id)) removePeer(from);
-    else if (incoming && incoming.from === from) { dropIncoming(); toast(`Nieodebrane połączenie od ${nameOf(from)}`); }
+    if (call && (call.peers.has(from) || call.waiting.has(from)) && (!d.cid || d.cid === call.id)) {
+      call.waiting.delete(from);
+      if (call.peers.has(from)) removePeer(from);
+      else if (!call.peers.size && !call.waiting.size) endCall(`${nameOf(from)} nie może teraz rozmawiać`, false);
+    } else if (incoming && incoming.from === from && (!d.cid || d.cid === incoming.cid)) missIncoming();
   } else if (d.t === "cjoin") {
     if (!call || d.cid !== call.id || !call.gid || d.gid !== call.gid || call.peers.has(from)) return;
     if (meKey() < from) placeCall(from, true);
     else sendEphemeral(from, { t: "cjoin", cid: call.id, gid: call.gid });
+  } else if (d.t === "cmiss") { // nieodebrane, gdy byłem offline
+    if (typeof d.cid !== "string") return;
+    logCall({ cid: d.cid.slice(0, 24), key: from, author: from, mode: d.mode === "video" ? "video" : "audio", missed: true, ts: Math.min(Number(d.ts) || now(), now()) });
   }
 }
 
@@ -1258,7 +1467,17 @@ function wireUI() {
   $("#incNo").onclick = declineIncoming;
 
   const input = $("#input");
-  input.addEventListener("input", () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 140) + "px"; });
+  input.addEventListener("input", () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 140) + "px"; if (input.value) sendTyping(); });
+  const panel = $("#emojiPanel");
+  for (const emo of EMOJI_PANEL) {
+    panel.append(h("button", { type: "button", "aria-label": emo, onclick: () => {
+      input.setRangeText(emo, input.selectionStart, input.selectionEnd, "end");
+      input.dispatchEvent(new Event("input"));
+    } }, emo));
+  }
+  $("#emojiBtn").onclick = () => { panel.hidden = !panel.hidden; $("#emojiBtn").classList.toggle("on", !panel.hidden); };
+  $("#closeSheet").onclick = closeSheet;
+  $("#sheet").onclick = (e) => { if (e.target.id === "sheet") closeSheet(); };
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey && !e.isComposing && matchMedia("(hover: hover)").matches) { e.preventDefault(); $("#composer").requestSubmit(); }
   });
@@ -1267,12 +1486,15 @@ function wireUI() {
     const text = input.value.trim();
     if (!text) return;
     send(text);
+    $("#emojiPanel").hidden = true;
+    $("#emojiBtn").classList.remove("on");
     input.value = "";
     input.style.height = "auto";
     input.focus();
   };
 
   document.addEventListener("visibilitychange", () => {
+    if (state.me) for (const c of conns.values()) if (c.open) { try { c.send({ t: "vis", h: document.hidden }); } catch {} }
     if (!document.hidden && state.me) {
       sweep();
       renderSoon();
@@ -1315,7 +1537,7 @@ function showWelcome() {
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 // Sprawdzanie aktualizacji: przy powrocie do aplikacji i co 5 minut. Nowa wersja = automatyczne przeładowanie
 // (dane są zapisane w telefonie, więc nic nie ginie). Nie przeładowujemy w trakcie rozmowy ani pisania.
-const APP_VERSION = 9;
+const APP_VERSION = 10;
 async function checkUpdate() {
   try {
     const r = await fetch("version.json?t=" + Date.now(), { cache: "no-store" });
