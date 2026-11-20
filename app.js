@@ -1308,6 +1308,7 @@ function showWelcome() {
   };
 }
 
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 wireUI();
 if (typeof Peer === "undefined") {
   document.body.append(h("p", { style: "padding:24px;color:#fff" }, "Nie udało się wczytać biblioteki sieciowej. Odśwież stronę."));
