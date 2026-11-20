@@ -188,9 +188,70 @@ function ping() {
   } catch {}
 }
 
+// Okienko z pytaniem – działa wszędzie, także tam, gdzie prompt() jest zablokowany
+function ask({ title, placeholder, text, people, ok = "OK", danger = false }) {
+  return new Promise((resolve) => {
+    const body = $("#askBody");
+    body.innerHTML = "";
+    let input = null;
+    if (text) {
+      const p = document.createElement("p");
+      p.className = "ask-text";
+      p.textContent = text;
+      body.append(p);
+    }
+    if (placeholder) {
+      const label = document.createElement("label");
+      label.className = "field";
+      input = document.createElement("input");
+      input.id = "askInput";
+      input.maxLength = 40;
+      input.placeholder = placeholder;
+      label.append(input);
+      body.append(label);
+    }
+    if (people) {
+      const box = document.createElement("div");
+      box.className = "field";
+      box.innerHTML = "<span>Kto jest w grupce?</span>";
+      for (const c of people) {
+        const row = document.createElement("label");
+        row.className = "pick";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.value = c.id;
+        row.append(cb, avatar(c, "sm"), document.createTextNode(c.name));
+        box.append(row);
+      }
+      body.append(box);
+    }
+    $("#askTitle").textContent = title;
+    $("#askOk").textContent = ok;
+    $("#askOk").classList.toggle("danger-fill", danger);
+    const sheet = $("#ask");
+    sheet.hidden = false;
+    setTimeout(() => input?.focus(), 50);
+    const done = (val) => {
+      sheet.hidden = true;
+      $("#askForm").onsubmit = $("#askClose").onclick = sheet.onclick = null;
+      resolve(val);
+    };
+    $("#askForm").onsubmit = (e) => {
+      e.preventDefault();
+      if (input && !input.value.trim()) return input.focus();
+      const picked = [...body.querySelectorAll(".pick input:checked")].map((x) => x.value);
+      done({ value: input?.value.trim() ?? "", picked });
+    };
+    $("#askClose").onclick = () => done(null);
+    sheet.onclick = (e) => {
+      if (e.target === sheet) done(null);
+    };
+  });
+}
+
 // ---------- Render ----------
 function render() {
-  document.documentElement.dataset.theme = state.theme;
+  document.documentElement.dataset.styl = state.theme;
   const me = person(meId());
   $("#meName").textContent = me.name + (actingAs ? " (podgląd)" : "");
   const meAv = $("#meAvatar");
@@ -334,10 +395,10 @@ function renderMain() {
     const add = document.createElement("button");
     add.className = "chip";
     add.textContent = "+ notatnik";
-    add.onclick = () => {
-      const name = prompt("Nazwa notatnika:");
-      if (!name?.trim()) return;
-      const nb = { id: uid(), name: name.trim(), entries: [] };
+    add.onclick = async () => {
+      const res = await ask({ title: "Nowy notatnik", placeholder: "np. Plotki z wycieczki", ok: "Utwórz" });
+      if (!res) return;
+      const nb = { id: uid(), name: res.value, entries: [] };
       g.notebooks.push(nb);
       state.notebook[g.id] = nb.id;
       save();
@@ -458,34 +519,28 @@ function send(text) {
   render();
 }
 
-function addContact() {
-  const name = prompt("Nick kolegi:");
-  if (!name?.trim()) return;
+async function addContact() {
+  const res = await ask({ title: "Dodaj kolegę", placeholder: "Nick kolegi", ok: "Dodaj" });
+  if (!res) return;
   state.contacts.push({
     id: uid(),
-    name: name.trim(),
+    name: res.value,
     color: COLORS[state.contacts.length % COLORS.length],
     online: false,
   });
   save();
   render();
-  toast(`Dodano ${name.trim()} do kontaktów`);
+  toast(`Dodano ${res.value} do kontaktów`);
 }
 
-function addGroup() {
-  const name = prompt("Nazwa grupki:");
-  if (!name?.trim()) return;
-  const others = state.contacts.map((c, i) => `${i + 1}. ${c.name}`).join("\n");
-  const pick = prompt(`Kogo dodać? Wpisz numery po przecinku:\n${others}`, "1,2") || "";
-  const members = pick
-    .split(",")
-    .map((s) => state.contacts[parseInt(s, 10) - 1]?.id)
-    .filter(Boolean);
+async function addGroup() {
+  const res = await ask({ title: "Nowa grupka", placeholder: "Nazwa grupki", people: state.contacts, ok: "Utwórz" });
+  if (!res) return;
   const g = {
     id: uid(),
-    name: name.trim(),
+    name: res.value,
     emoji: "💬",
-    members: ["me", ...new Set(members)],
+    members: ["me", ...res.picked],
     notebooks: [{ id: uid(), name: "Notatnik", entries: [] }],
     messages: [],
   };
@@ -611,8 +666,10 @@ $("#soundToggle").onchange = (e) => {
   state.sound = e.target.checked;
   save(false);
 };
-$("#resetData").onclick = () => {
-  if (!confirm("Na pewno wyczyścić wszystko na tym telefonie?")) return;
+$("#resetData").onclick = async () => {
+  $("#settings").hidden = true;
+  const res = await ask({ title: "Wyczyścić dane?", text: "Znikną wszystkie wpisy, czaty i kontakty zapisane na tym telefonie.", ok: "Wyczyść", danger: true });
+  if (!res) return;
   state = seed();
   save();
   render();

@@ -1,6 +1,6 @@
 /* ---------- Style (motywy) ---------- */
 :root,
-[data-theme="noc"] {
+[data-styl="noc"] {
   --bg: #14121c;
   --panel: #1d1a28;
   --panel-2: #262233;
@@ -11,7 +11,7 @@
   --mine: #3b2a6b;
   --border: #2e2a3d;
 }
-[data-theme="dzien"] {
+[data-styl="dzien"] {
   --bg: #f6f5fa;
   --panel: #ffffff;
   --panel-2: #eeecf5;
@@ -22,7 +22,7 @@
   --mine: #e7defc;
   --border: #e2dfec;
 }
-[data-theme="neon"] {
+[data-styl="neon"] {
   --bg: #07090d;
   --panel: #0e131a;
   --panel-2: #141c26;
@@ -33,7 +33,7 @@
   --mine: #063a2b;
   --border: #1a2733;
 }
-[data-theme="pastel"] {
+[data-styl="pastel"] {
   --bg: #fff4f2;
   --panel: #ffffff;
   --panel-2: #ffe7e3;
@@ -44,7 +44,7 @@
   --mine: #ffd9ea;
   --border: #f5d9d4;
 }
-[data-theme="ocean"] {
+[data-styl="ocean"] {
   --bg: #0b1724;
   --panel: #10223a;
   --panel-2: #163050;
@@ -68,7 +68,7 @@ body {
 button { font: inherit; color: inherit; cursor: pointer; }
 input, textarea { font: inherit; color: inherit; }
 
-.app { display: flex; height: 100dvh; }
+.app { display: flex; height: 100%; }
 
 /* ---------- Panel boczny ---------- */
 .sidebar {
@@ -284,3 +284,13 @@ input, textarea { font: inherit; color: inherit; }
   .backdrop.show { opacity: 1; pointer-events: auto; }
   .icon-btn { width: 36px; height: 36px; font-size: 17px; }
 }
+
+/* ---------- Okienko z pytaniem ---------- */
+.primary {
+  margin-top: 20px; width: 100%; padding: 12px; border-radius: 12px; border: 0;
+  background: var(--accent); color: var(--accent-text); font-weight: 700;
+}
+.primary.danger-fill { background: #ef4444; color: #fff; }
+.pick { display: flex; align-items: center; gap: 10px; padding: 8px 4px; }
+.pick input { width: 20px; height: 20px; accent-color: var(--accent); }
+.ask-text { color: var(--muted); margin: 12px 0 0; }
