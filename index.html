@@ -11,7 +11,7 @@
   <link rel="apple-touch-icon" href="icon-180.png" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-title" content="Paleta" />
-  <link rel="stylesheet" href="styles.css?v=8" />
+  <link rel="stylesheet" href="styles.css?v=9" />
 </head>
 <body>
   <!-- Ikony -->
@@ -67,7 +67,7 @@
     <form id="welcomeForm" class="welcome-form">
       <label for="nickField">Wybierz swój nick</label>
       <input id="nickField" maxlength="16" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" placeholder="np. kuba_07" />
-      <div class="hint">3–16 znaków: litery, cyfry i _ . Koledzy dodadzą cię po tym nicku.</div>
+      <div class="hint">3–16 znaków: litery, cyfry lub podkreślnik (_). Po tym nicku znajomi cię dodadzą.</div>
       <div class="err" id="welcomeErr"></div>
       <button class="primary" type="submit" id="welcomeBtn">Zaczynamy</button>
     </form>
@@ -168,6 +168,6 @@
   <div class="toast" id="toast" hidden></div>
 
   <script src="peerjs.min.js"></script>
-  <script src="app.js?v=8"></script>
+  <script src="app.js?v=9"></script>
 </body>
 </html>

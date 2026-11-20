@@ -538,7 +538,7 @@ function renderRail() {
       onClick: () => openRoom({ type: "group", id: g.id }),
     }));
   }
-  if (!state.groups.length) gl.append(h("div", { class: "rail-hint" }, "brak"));
+  if (!state.groups.length) gl.append(railItem({ av: h("span", { class: "avatar ghost", html: ic("plus") }), label: "Nowa", onClick: addGroup }));
   const friends = [...state.contacts].sort((x, y) => (online.has(y.id) - online.has(x.id)) || x.nick.localeCompare(y.nick));
   for (const c of friends) {
     cl.append(railItem({
@@ -547,7 +547,7 @@ function renderRail() {
       onClick: () => openRoom({ type: "dm", id: c.id }),
     }));
   }
-  if (!cl.children.length) cl.append(h("div", { class: "rail-hint" }, "brak"));
+  if (!cl.children.length) cl.append(railItem({ av: h("span", { class: "avatar ghost", html: ic("userplus") }), label: "Dodaj", onClick: addFriend }));
   const av = avatar(meKey());
   av.classList.remove("on");
   av.classList.add(netStatus === "online" ? "on" : netStatus === "error" ? "bad" : "wait");
@@ -564,6 +564,7 @@ function renderMain() {
   const me = meKey();
   $("#roomActions").hidden = !inRoom;
   const bar = $("#notebookBar");
+  const barScroll = bar.scrollLeft;
   bar.replaceChildren();
   let view = null, canWrite = inRoom;
 
@@ -582,6 +583,9 @@ function renderMain() {
       bar.append(chip);
     }
     canWrite = view === "chat" || view === me;
+    bar.scrollLeft = barScroll;
+    const act = bar.querySelector(".chip.active");
+    if (act && (act.offsetLeft < bar.scrollLeft || act.offsetLeft + act.offsetWidth > bar.scrollLeft + bar.clientWidth)) bar.scrollLeft = act.offsetLeft - 12;
   } else if (dm) {
     $("#roomName").textContent = nameOf(dm);
     $("#roomSub").textContent = online.has(dm) ? "online" : "offline";
@@ -872,8 +876,8 @@ function openInfo(keepOpen) {
     for (const m of list) {
       const mine = m.id === me;
       box.append(row({
-        av: avatar(m.id), label: mine ? `${state.me.nick} (Ty)` : nameOf(m.id),
-        sub: mine ? "to ty" : online.has(m.id) ? "online" : "offline",
+        av: avatar(m.id), label: mine ? "Ty" : nameOf(m.id),
+        sub: mine ? state.me.nick : online.has(m.id) ? "online" : "offline",
         onClick: mine ? null : () => { addContactByNick(nameOf(m.id)); save(); closePage("#info"); openRoom({ type: "dm", id: m.id }); },
       }));
     }
@@ -970,15 +974,15 @@ function blankTrack() {
   const track = c.captureStream(1).getVideoTracks()[0];
   return { track, stop() { clearInterval(iv); track.stop(); } };
 }
-async function camTrack(facing) {
-  const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing, width: { ideal: 640 }, height: { ideal: 480 } } });
+async function camTrack(facing, hd = true) {
+  const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing, width: { ideal: hd ? 1280 : 640 }, height: { ideal: hd ? 720 : 480 }, frameRate: { ideal: 30 } } });
   return s.getVideoTracks()[0];
 }
 async function screenTrack() {
   const s = await navigator.mediaDevices.getDisplayMedia({ video: true });
   return s.getVideoTracks()[0];
 }
-async function getLocal(mode, facing) {
+async function getLocal(mode, facing, hd = true) {
   const stream = new MediaStream();
   let warn = "", m = mode, vtrack = null, blank = null;
   try {
@@ -986,7 +990,7 @@ async function getLocal(mode, facing) {
     a.getAudioTracks().forEach((t) => stream.addTrack(t));
   } catch { warn = "Brak dostępu do mikrofonu"; }
   try {
-    if (mode === "video") vtrack = await camTrack(facing);
+    if (mode === "video") vtrack = await camTrack(facing, hd);
     else if (mode === "screen") vtrack = await screenTrack();
   } catch { warn = warn || (mode === "screen" ? "Nie udało się udostępnić ekranu" : "Brak dostępu do kamery"); m = "audio"; }
   if (!vtrack) { blank = blankTrack(); vtrack = blank.track; }
@@ -1008,11 +1012,11 @@ async function startCall(keys, mode, gid) {
   if (!navigator.mediaDevices || !window.RTCPeerConnection) return toast("Ta przeglądarka nie obsługuje rozmów");
   keys = keys.filter((x) => x !== meKey() && allowed(x));
   if (!keys.length) return toast("Nie ma do kogo zadzwonić");
-  toast(gid ? "Dzwonię do grupki…" : `Łączę z ${nameOf(keys[0])}…`);
+  toast(gid ? "Dzwonię do grupki…" : "Łączę…");
   const ok = await Promise.all(keys.map((x) => ensureOnline(x, 3000)));
   const targets = keys.filter((_, i) => ok[i]);
   if (!targets.length) return toast(gid ? "Nikogo z grupki nie ma teraz online" : `${nameOf(keys[0])} jest teraz offline`);
-  const L = await getLocal(mode, "user");
+  const L = await getLocal(mode, "user", !gid);
   if (call || incoming) { L.stream.getTracks().forEach((t) => t.stop()); return; }
   if (L.warn) toast(L.warn);
   call = newCall(uid(), gid || null, L, targets[0], true);
@@ -1099,10 +1103,10 @@ function updateCallUI() {
   lv().classList.toggle("screen", call.mode === "screen");
   $("#cMute").classList.toggle("off", call.muted);
   $("#cMute use").setAttribute("href", call.muted ? "#i-micoff" : "#i-mic");
-  $("#cCam").classList.toggle("off", call.mode !== "video");
+
   $("#cCam use").setAttribute("href", call.mode === "video" ? "#i-video" : "#i-camoff");
   $("#cFlip").hidden = call.mode !== "video";
-  $("#cScreen").classList.toggle("off", call.mode === "screen");
+  $("#cScreen").classList.toggle("act", call.mode === "screen");
 }
 async function swapVideo(track, mode) {
   if (!call) return;
@@ -1128,13 +1132,13 @@ async function toggleCam() {
   if (!call) return;
   try {
     if (call.mode === "video") await swapVideo(null, "audio");
-    else { call.vtrack.stop(); await swapVideo(await camTrack(call.facing), "video"); }
+    else { call.vtrack.stop(); await swapVideo(await camTrack(call.facing, !call.gid), "video"); }
   } catch { toast("Brak dostępu do kamery"); swapVideo(null, "audio").catch(() => {}); }
 }
 async function flipCam() {
   if (!call || call.mode !== "video") return;
   const next = call.facing === "user" ? "environment" : "user";
-  try { call.vtrack.stop(); await swapVideo(await camTrack(next), "video"); call.facing = next; }
+  try { call.vtrack.stop(); await swapVideo(await camTrack(next, !call.gid), "video"); call.facing = next; }
   catch { toast("Nie udało się przełączyć kamery"); swapVideo(null, "audio").catch(() => {}); }
 }
 async function toggleScreen() {
@@ -1197,7 +1201,7 @@ async function acceptIncoming() {
   const inc = incoming;
   if (!inc) return;
   dropIncoming();
-  const L = await getLocal(inc.mode === "video" ? "video" : "audio", "user");
+  const L = await getLocal(inc.mode === "video" ? "video" : "audio", "user", !inc.gid);
   if (call) { L.stream.getTracks().forEach((t) => t.stop()); return; }
   if (L.warn) toast(L.warn);
   call = newCall(inc.cid, inc.gid, L, inc.from, false);
@@ -1311,7 +1315,7 @@ function showWelcome() {
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 // Sprawdzanie aktualizacji: przy powrocie do aplikacji i co 5 minut. Nowa wersja = automatyczne przeładowanie
 // (dane są zapisane w telefonie, więc nic nie ginie). Nie przeładowujemy w trakcie rozmowy ani pisania.
-const APP_VERSION = 8;
+const APP_VERSION = 9;
 async function checkUpdate() {
   try {
     const r = await fetch("version.json?t=" + Date.now(), { cache: "no-store" });
