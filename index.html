@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="pl" data-theme="noc">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#14121c" />
+  <title>Paleta</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <!-- Panel boczny: grupki, czaty, kontakty -->
+    <aside class="sidebar" id="sidebar" aria-label="Grupki, czaty i kontakty">
+      <div class="sidebar-head">
+        <div class="me">
+          <span class="avatar" id="meAvatar"></span>
+          <div>
+            <div class="me-name" id="meName"></div>
+            <div class="me-status">dostępny</div>
+          </div>
+        </div>
+        <button class="icon-btn only-mobile" id="closeSidebar" aria-label="Zamknij panel">✕</button>
+      </div>
+
+      <input class="search" id="search" type="search" placeholder="Szukaj…" />
+
+      <section>
+        <div class="section-head">
+          <h2>Grupki</h2>
+          <button class="link-btn" id="addGroup">+ nowa</button>
+        </div>
+        <ul class="list" id="groupList"></ul>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>Czaty</h2>
+        </div>
+        <ul class="list" id="chatList"></ul>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>Kontakty</h2>
+          <button class="link-btn" id="addContact">+ dodaj</button>
+        </div>
+        <ul class="list" id="contactList"></ul>
+      </section>
+    </aside>
+    <div class="backdrop" id="backdrop"></div>
+
+    <!-- Główna część -->
+    <main class="main">
+      <header class="topbar">
+        <button class="icon-btn only-mobile" id="openSidebar" aria-label="Otwórz panel">☰</button>
+        <div class="title">
+          <div class="title-name" id="roomName"></div>
+          <div class="title-sub" id="roomSub"></div>
+        </div>
+        <div class="actions">
+          <button class="icon-btn" data-call="audio" aria-label="Zadzwoń">📞</button>
+          <button class="icon-btn" data-call="video" aria-label="Kamerka">🎥</button>
+          <button class="icon-btn" data-call="screen" aria-label="Udostępnij ekran">🖥️</button>
+          <button class="icon-btn" id="openSettings" aria-label="Ustawienia">⚙️</button>
+        </div>
+      </header>
+
+      <nav class="tabs" role="tablist">
+        <button class="tab active" data-tab="notes" role="tab">📓 Notatnik</button>
+        <button class="tab" data-tab="chat" role="tab">💬 Czat</button>
+      </nav>
+
+      <div class="notebooks" id="notebookBar"></div>
+
+      <section class="feed" id="feed" aria-live="polite"></section>
+
+      <form class="composer" id="composer">
+        <textarea id="input" rows="1" placeholder="Napisz coś do grupki…"></textarea>
+        <button class="send" type="submit" aria-label="Wyślij">➤</button>
+      </form>
+    </main>
+  </div>
+
+  <!-- Ustawienia -->
+  <div class="sheet" id="settings" hidden>
+    <div class="sheet-card">
+      <div class="sheet-head">
+        <h2>Ustawienia</h2>
+        <button class="icon-btn" id="closeSettings" aria-label="Zamknij">✕</button>
+      </div>
+
+      <label class="field">
+        <span>Twój nick</span>
+        <input id="nickInput" maxlength="24" />
+      </label>
+
+      <div class="field">
+        <span>Styl</span>
+        <div class="themes" id="themes"></div>
+      </div>
+
+      <label class="field row">
+        <span>Dźwięk powiadomień</span>
+        <input type="checkbox" id="soundToggle" />
+      </label>
+
+      <button class="danger" id="resetData">Wyczyść dane na tym telefonie</button>
+    </div>
+  </div>
+
+  <!-- Rozmowa (podgląd kamerki / ekranu) -->
+  <div class="call" id="call" hidden>
+    <video id="callVideo" autoplay playsinline muted></video>
+    <div class="call-info">
+      <div class="call-title" id="callTitle"></div>
+      <div class="call-sub" id="callSub"></div>
+    </div>
+    <button class="hangup" id="hangup">Rozłącz</button>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
