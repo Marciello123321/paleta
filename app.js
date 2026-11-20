@@ -17,6 +17,13 @@ const THEMES = [
 ];
 const GROUP_EMOJI = ["🔥", "🎮", "⚽", "🎧", "🍕", "😈", "👻", "🌴"];
 const REACTIONS = ["😂", "😱", "🔥", "👀"];
+const AV_COLORS = ["#e0457b", "#ec4899", "#8b5cf6", "#6366f1", "#3b82f6", "#06b6d4", "#10b981", "#84cc16", "#f59e0b", "#f97316", "#ef4444", "#64748b"];
+const AV_EMOJI = ["😎", "🤠", "👽", "🐸", "🐱", "🦊", "🐼", "🦄", "🍕", "⚽", "🎮", "🎧", "👑", "💀", "🔥", "🌸"];
+const RINGTONES = [
+  { id: "klasyczny", name: "Klasyczny", notes: [[660, 0, 0.3], [880, 0.2, 0.3]], every: 1900 },
+  { id: "wesoly", name: "Wesoły", notes: [[523, 0, 0.16], [659, 0.15, 0.16], [784, 0.3, 0.16], [1047, 0.45, 0.32]], every: 2000 },
+  { id: "cichy", name: "Cichy", notes: [[440, 0, 0.5], [554, 0.45, 0.6]], every: 2600 },
+];
 const EMOJI_PANEL = ["😂", "🤣", "😭", "😍", "🥰", "😘", "😎", "🤔", "😏", "🙄", "😱", "😳", "🥺", "😡", "🤫", "💀", "👀", "🔥", "❤️", "💔", "👍", "👎", "🙏", "👏", "🎉", "💯", "🍕", "⚽"];
 const PAL = [["#8b5cf6", "#ec4899"], ["#f59e0b", "#ef4444"], ["#10b981", "#06b6d4"], ["#3b82f6", "#8b5cf6"], ["#ec4899", "#f59e0b"], ["#14b8a6", "#84cc16"], ["#6366f1", "#22d3ee"], ["#f43f5e", "#fb923c"]];
 const ICE = [
@@ -47,7 +54,7 @@ const ic = (n, c = "") => `<svg class="ic ${c}" aria-hidden="true"><use href="#i
 
 /* ============ Stan ============ */
 function fresh() {
-  return { v: 2, me: null, theme: "noc", sound: true, contacts: [], requests: [], pending: [], names: {}, groups: [], dms: {}, outbox: {}, current: null, view: {}, unread: {}, push: {}, lastSeen: {}, pushTopic: null, pushOn: false };
+  return { v: 2, me: null, theme: "noc", sound: true, contacts: [], requests: [], pending: [], names: {}, groups: [], dms: {}, outbox: {}, current: null, view: {}, unread: {}, push: {}, lastSeen: {}, pushTopic: null, pushOn: false, profile: { color: null, emoji: null, about: "" }, prof: {}, prefs: {}, muted: {}, reads: {}, seen: {} };
 }
 function load() {
   try {
@@ -68,6 +75,12 @@ function migrate(s) {
   }
   s.view ||= {};
   s.push ||= {};
+  s.profile ||= { color: null, emoji: null, about: "" };
+  s.prof ||= {};
+  s.muted ||= {};
+  s.reads ||= {};
+  s.seen ||= {};
+  s.prefs = { font: "m", wall: true, enter: matchMedia("(hover: hover)").matches, vibrate: true, ringtone: "klasyczny", typing: true, receipts: true, ...(s.prefs || {}) };
   s.lastSeen ||= {};
   for (const p of [...(s.pending || []), ...(s.requests || [])]) {
     if (!s.contacts.some((c) => c.id === p.id)) s.contacts.push({ id: p.id, nick: p.nick });
@@ -78,6 +91,7 @@ function migrate(s) {
   return s;
 }
 let state = load();
+if (!state.prefs.font) state = migrate(state);
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(state)); } catch {}
 }
@@ -95,9 +109,11 @@ function pal(key) {
   for (const c of String(key)) x = (x * 31 + c.charCodeAt(0)) >>> 0;
   return PAL[x % PAL.length];
 }
+function profOf(key) { return state.me && key === meKey() ? state.profile : state.prof[key] || {}; }
 function avatar(key, cls = "") {
-  const el = h("span", { class: `avatar ${cls} ${online.has(key) ? "on" : ""}` }, nameOf(key).slice(0, 1));
-  el.style.background = pal(key)[0];
+  const p = profOf(key);
+  const el = h("span", { class: `avatar ${cls} ${online.has(key) ? "on" : ""} ${p.emoji ? "emo" : ""}` }, p.emoji || nameOf(key).slice(0, 1));
+  el.style.background = p.color || pal(key)[0];
   return el;
 }
 const hm = (ts) => new Date(ts).toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" });
@@ -148,15 +164,20 @@ function tone(list) {
     }
   } catch {}
 }
-const ping = () => tone([[880, 0], [1175, 0.12]]);
+const ping = () => { tone([[880, 0], [1175, 0.12]]); if (state.prefs.vibrate && document.hidden) navigator.vibrate?.(80); };
 let ringTimer = null;
+function ringOnce() {
+  const r = RINGTONES.find((x) => x.id === state.prefs.ringtone) || RINGTONES[0];
+  tone(r.notes);
+  if (state.prefs.vibrate) navigator.vibrate?.([300, 150, 300]);
+  return r;
+}
 function ring(on) {
   clearInterval(ringTimer);
   ringTimer = null;
   if (!on) { navigator.vibrate?.(0); return; }
-  const beep = () => { tone([[660, 0, 0.3], [880, 0.2, 0.3]]); navigator.vibrate?.([300, 150, 300]); };
-  beep();
-  ringTimer = setInterval(beep, 1900);
+  const r = ringOnce();
+  ringTimer = setInterval(ringOnce, r.every);
 }
 
 /* ============ Okienko z pytaniem ============ */
@@ -247,7 +268,7 @@ function pushTo(key, title, message, { urgent = false, every = 0 } = {}) {
 }
 const away = new Set(); // znajomi połączeni, ale z Plotkarkami w tle
 function needsPush(key) { return !online.has(key) || away.has(key); }
-function helloMsg() { return { t: "hello", nick: state.me.nick, push: state.pushOn ? ensureTopic() : null, h: document.hidden }; }
+function helloMsg() { const p = state.profile; return { t: "hello", nick: state.me.nick, push: state.pushOn ? ensureTopic() : null, h: document.hidden, prof: { color: p.color, emoji: p.emoji, about: p.about } }; }
 function sayHelloAll() { for (const c of conns.values()) if (c.open) { try { c.send(helloMsg()); } catch {} } }
 
 /* ============ Sieć (PeerJS) ============ */
@@ -347,6 +368,7 @@ function setupConn(conn) {
     online.add(rk);
     try { conn.send(helloMsg()); } catch {}
     flush(rk);
+    resendSeen(rk);
     renderSoon();
   });
   conn.on("data", (d) => onData(rk, d, conn));
@@ -410,9 +432,10 @@ function viewingKey() {
   if (g) { const v = viewOf(g); return v === "chat" ? `g:${g.id}` : `n:${g.id}:${v}`; }
   return state.current && state.current.type === "dm" ? `d:${state.current.id}` : null;
 }
+const baseRoom = (ukey) => (ukey.startsWith("n:") ? `g:${ukey.split(":")[1]}` : ukey);
 function bump(ukey) {
   if (ukey !== viewingKey() || document.hidden) state.unread[ukey] = (state.unread[ukey] || 0) + 1;
-  ping();
+  if (!state.muted[baseRoom(ukey)]) ping();
 }
 function groupUnread(g) {
   let n = state.unread[`g:${g.id}`] || 0;
@@ -453,6 +476,13 @@ function onData(from, d, conn) {
         if (typeof d.push === "string" && PUSH_RE.test(d.push)) state.push[from] = d.push;
         else if (d.push === null) delete state.push[from];
         if (d.h) away.add(from); else away.delete(from);
+        if (d.prof && typeof d.prof === "object") {
+          state.prof[from] = {
+            color: AV_COLORS.includes(d.prof.color) ? d.prof.color : null,
+            emoji: AV_EMOJI.includes(d.prof.emoji) ? d.prof.emoji : null,
+            about: typeof d.prof.about === "string" ? d.prof.about.slice(0, 80) : "",
+          };
+        }
         const c = state.contacts.find((c) => c.id === from);
         if (c) c.nick = d.nick;
         save(); renderSoon();
@@ -547,6 +577,14 @@ function applyEvent(from, d) {
       setTimeout(renderSoon, 4600);
       return;
     }
+    case "read": {
+      const rk = d.gid ? (groupOf(d.gid, from) ? `g:${d.gid}` : null) : `d:${from}`;
+      const ts = Math.min(Number(d.ts) || 0, now() + 60000);
+      if (!rk || ts <= ((state.reads[rk] || {})[from] || 0)) return;
+      (state.reads[rk] ||= {})[from] = ts;
+      save(); renderSoon();
+      return;
+    }
     case "vis":
       if (d.h) away.add(from); else away.delete(from);
       return;
@@ -554,6 +592,42 @@ function applyEvent(from, d) {
       onCallEvent(from, d);
       return;
   }
+}
+
+/* ============ Potwierdzenia odczytu ============ */
+const lastIncoming = (list) => { for (let i = list.length - 1; i >= 0; i--) if (list[i].a !== meKey() && !list[i].c) return list[i].ts; return 0; };
+function markSeen() { // to, co właśnie widzę, oznaczam jako przeczytane i daję znać
+  if (document.hidden || !state.me) return;
+  const g = curGroup();
+  const dm = state.current && state.current.type === "dm" ? state.current.id : null;
+  let rk, ts, to, ev;
+  if (g && viewOf(g) === "chat") { rk = `g:${g.id}`; ts = lastIncoming(g.messages); to = g.members.map((m) => m.id).filter((x) => x !== meKey()); ev = { t: "read", gid: g.id, ts }; }
+  else if (dm) { rk = `d:${dm}`; ts = lastIncoming(state.dms[dm] || []); to = [dm]; ev = { t: "read", ts }; }
+  else return;
+  if (!ts || ts <= (state.seen[rk] || 0)) return;
+  state.seen[rk] = ts;
+  save();
+  if (!state.prefs.receipts) return;
+  for (const key of to) { const c = conns.get(key); if (c && c.open) { try { c.send(ev); } catch {} } }
+}
+function resendSeen(key) {
+  if (!state.prefs.receipts) return;
+  const c = conns.get(key);
+  if (!c || !c.open) return;
+  try {
+    if (state.seen[`d:${key}`]) c.send({ t: "read", ts: state.seen[`d:${key}`] });
+    for (const g of state.groups) if (state.seen[`g:${g.id}`] && g.members.some((m) => m.id === key)) c.send({ t: "read", gid: g.id, ts: state.seen[`g:${g.id}`] });
+  } catch {}
+}
+function readByAll(rk, others, ts) {
+  if (!state.prefs.receipts || !others.length) return false;
+  const r = state.reads[rk] || {};
+  return others.every((x) => (r[x] || 0) >= ts);
+}
+function applyPrefs() {
+  const r = document.documentElement;
+  r.classList.toggle("nowall", !state.prefs.wall);
+  r.style.setProperty("--fs", { s: "13.5px", m: "15px", l: "17.5px" }[state.prefs.font] || "15px");
 }
 
 /* ============ Rysowanie ============ */
@@ -575,7 +649,7 @@ function lastSeenText(key) {
 }
 let lastTyping = 0;
 function sendTyping() {
-  if (now() - lastTyping < 2500) return;
+  if (!state.prefs.typing || now() - lastTyping < 2500) return;
   lastTyping = now();
   const g = curGroup();
   const to = g ? g.members.map((m) => m.id).filter((x) => x !== meKey()) : state.current && state.current.type === "dm" ? [state.current.id] : [];
@@ -598,7 +672,9 @@ const plural = (n) => `${n} ${n === 1 ? "osoba" : n % 10 >= 2 && n % 10 <= 4 && 
 function render() {
   if (!state.me) return;
   document.documentElement.dataset.styl = state.theme;
+  applyPrefs();
   if (!document.hidden) { const vk = viewingKey(); if (vk) delete state.unread[vk]; }
+  markSeen();
   const head = getComputedStyle(document.documentElement).getPropertyValue("--head").trim();
   if (head) document.querySelector('meta[name="theme-color"]').content = head;
   renderRail();
@@ -727,31 +803,38 @@ function pendingIds() {
   for (const q of Object.values(state.outbox)) for (const ev of q) if (ev.e && ev.e.id) ids.add(ev.e.id);
   return ids;
 }
-function meta(ts, mine, pending) {
+function meta(ts, mine, status) {
   const m = h("span", { class: "meta" }, hm(ts));
-  if (mine) m.append(h("span", { class: pending ? "" : "done", html: ic(pending ? "tick" : "ticks"), title: pending ? "czeka na wysłanie" : "dostarczone" }));
+  if (mine) {
+    const t = { pending: ["tick", "", "czeka na wysłanie"], sent: ["ticks", "", "dostarczone"], read: ["ticks", "read", "przeczytane"] }[status];
+    m.append(h("span", { class: t[1], html: ic(t[0]), title: t[2] }));
+  }
   return m;
 }
+let unreadMark = null; // { key, n } – pasek „nieprzeczytane” po wejściu do rozmowy
 // Wiadomości i wpisy w stylu dymków: daty między dniami, ogonek przy pierwszym dymku danej osoby
-function bubbles(feed, list, { isGroup, note, onTap }) {
+function bubbles(feed, list, { isGroup, note, onTap, rk, others }) {
   const me = meKey(), pend = pendingIds();
   let day = "", prev = null;
-  for (const m of list) {
+  const sepAt = unreadMark && rk && unreadMark.key === rk && unreadMark.n > 0 ? Math.max(0, list.length - unreadMark.n) : -1;
+  list.forEach((m, i) => {
+    if (i === sepAt) { feed.append(h("div", { class: "unread-sep" }, unreadMark.n === 1 ? "1 nieprzeczytana wiadomość" : `${unreadMark.n} nieprzeczytane wiadomości`)); prev = null; }
     const d = dayLabel(m.ts);
     if (d !== day) { feed.append(h("div", { class: "day" }, d)); day = d; prev = null; }
     const mine = m.a === me, cont = prev === m.a;
     prev = m.a;
-    if (m.c) { feed.append(callBubble(m, mine)); prev = null; continue; }
+    if (m.c) { feed.append(callBubble(m, mine)); prev = null; return; }
     const b = h("div", { class: "msg" + (mine ? " mine" : "") + (cont ? " cont" : "") + (note ? " note" : "") });
     if (isGroup && !mine && !cont) {
       const who = h("div", { class: "who" }, nameOf(m.a));
       who.style.color = pal(m.a)[0];
       b.append(who);
     }
-    b.append(h("span", { class: "txt" }, m.x), meta(m.ts, mine, pend.has(m.id)));
+    const status = pend.has(m.id) ? "pending" : !note && rk && readByAll(rk, others, m.ts) ? "read" : "sent";
+    b.append(h("span", { class: "txt" }, m.x), meta(m.ts, mine, status));
     if (onTap) onTap(b, m);
     feed.append(b);
-  }
+  });
 }
 
 let picking = null;
@@ -803,7 +886,9 @@ function renderChat(feed, list, isGroup) {
     feed.append(h("div", { class: "empty", html: ic("chat") + "<p>Jeszcze cicho. Napisz pierwszy!</p>" }));
     return;
   }
-  bubbles(feed, list, { isGroup });
+  const g = curGroup();
+  const dm = !g && state.current ? state.current.id : null;
+  bubbles(feed, list, { isGroup, rk: g ? `g:${g.id}` : `d:${dm}`, others: g ? g.members.map((m) => m.id).filter((x) => x !== meKey()) : [dm] });
 }
 
 /* ============ Akcje ============ */
@@ -812,6 +897,8 @@ function pickView(g) {
   return "chat";
 }
 function openRoom(r) {
+  const uk = r.type === "dm" ? `d:${r.id}` : `g:${r.id}`;
+  unreadMark = state.unread[uk] ? { key: uk, n: state.unread[uk] } : null;
   state.current = r;
   $("#emojiPanel").hidden = true;
   $("#emojiBtn").classList.remove("on");
@@ -838,6 +925,7 @@ function send(text) {
     if (needsPush(state.current.id)) pushTo(state.current.id, "💬 Plotkarki", `${state.me.nick} napisał(a) do ciebie`, { every: 60000 });
   }
   forceScroll = true;
+  unreadMark = null;
   save();
   render();
 }
@@ -958,7 +1046,13 @@ function closePage(sel) {
   $(sel).hidden = true;
   try { if (history.state && history.state.page === sel) history.back(); } catch {}
 }
-window.addEventListener("popstate", () => { $("#info").hidden = true; $("#settings").hidden = true; });
+window.addEventListener("popstate", (e) => {
+  const st = e.state;
+  if (st && st.page === "#settings" && !$("#settings").hidden) { settingsSec = st.sec || "main"; renderSettings(); return; }
+  $("#info").hidden = true;
+  $("#settings").hidden = true;
+  settingsSec = "main";
+});
 function row({ icon, av, label, sub, danger, accent, onClick, trail }) {
   return h(onClick ? "button" : "div", { class: "row" + (danger ? " danger" : "") + (accent ? " accent" : ""), onclick: onClick },
     av || (icon ? h("span", { class: "row-ic", html: ic(icon) }) : null),
@@ -988,10 +1082,12 @@ function openInfo(keepOpen) {
         onClick: mine ? null : () => { addContactByNick(nameOf(m.id)); save(); closePage("#info"); openRoom({ type: "dm", id: m.id }); },
       }));
     }
+    body.append(h("div", { class: "box" }, muteRow(`g:${g.id}`), row({ icon: "trash", label: "Wyczyść czat", sub: "tylko na tym telefonie", onClick: () => clearChat(`g:${g.id}`) })));
     body.append(box, h("div", { class: "box" }, row({ icon: "logout", label: "Opuść grupkę", danger: true, onClick: () => leaveGroup(g) })));
   } else {
     $("#infoTitle").textContent = "Informacje o kontakcie";
-    body.append(h("div", { class: "profile" }, avatar(dm), h("h3", {}, nameOf(dm)), h("div", { class: "sub" }, online.has(dm) ? "online" : "offline"),
+    const about = (state.prof[dm] || {}).about;
+    body.append(h("div", { class: "profile" }, avatar(dm), h("h3", {}, nameOf(dm)), about ? h("div", { class: "about" }, about) : null, h("div", { class: "sub" }, online.has(dm) ? "online" : lastSeenText(dm)),
       h("div", { class: "quick" }, quickBtn("callface", "Zadzwoń", callAnd("audio")), quickBtn("video", "Wideo", callAnd("video")), quickBtn("chat", "Napisz", () => closePage("#info")))));
     const common = state.groups.filter((x) => x.members.some((m) => m.id === dm));
     if (common.length) {
@@ -999,34 +1095,187 @@ function openInfo(keepOpen) {
       for (const x of common) box.append(row({ av: h("span", { class: "avatar emoji" }, x.emoji), label: x.name, sub: plural(x.members.length), onClick: () => { closePage("#info"); openRoom({ type: "group", id: x.id }); } }));
       body.append(box);
     }
+    body.append(h("div", { class: "box" }, muteRow(`d:${dm}`), row({ icon: "trash", label: "Wyczyść czat", sub: "tylko na tym telefonie", onClick: () => clearChat(`d:${dm}`) })));
     body.append(h("div", { class: "box" }, row({ icon: "trash", label: `Usuń ${nameOf(dm)} ze znajomych`, danger: true, onClick: () => removeFriend(dm) })));
   }
   if (keepOpen !== true || $("#info").hidden) openPage("#info");
 }
+function muteRow(rk) {
+  const sw = h("label", { class: "switch" }, h("input", { type: "checkbox", "aria-label": "Wycisz" }), h("span", {}));
+  const cb = sw.querySelector("input");
+  cb.checked = !!state.muted[rk];
+  cb.onchange = () => { if (cb.checked) state.muted[rk] = true; else delete state.muted[rk]; save(); renderSoon(); };
+  return row({ icon: "belloff", label: "Wycisz powiadomienia", sub: "bez dźwięku przy nowych wiadomościach", trail: sw });
+}
+async function clearChat(rk) {
+  const r = await ask({ title: "Wyczyścić czat?", text: "Wiadomości znikną z tego telefonu. U innych zostaną.", ok: "Wyczyść", danger: true });
+  if (!r) return;
+  if (rk.startsWith("d:")) state.dms[rk.slice(2)] = [];
+  else { const g = state.groups.find((x) => x.id === rk.slice(2)); if (g) g.messages = []; }
+  save(); render(); toast("Czat wyczyszczony");
+}
+/* ---------- Ustawienia: strona główna i podstrony (jak w WhatsAppie) ---------- */
+let settingsSec = "main";
+const SECTIONS = {
+  profil: "Profil", prywatnosc: "Prywatność", czaty: "Czaty", powiadomienia: "Powiadomienia", kopia: "Kopia i pamięć", info: "Pomoc i informacje",
+};
+function swRow(o, key, onChange) { // wiersz z przełącznikiem
+  const sw = h("label", { class: "switch" }, h("input", { type: "checkbox", "aria-label": o.label }), h("span", {}));
+  const cb = sw.querySelector("input");
+  cb.checked = !!state.prefs[key];
+  cb.onchange = () => { state.prefs[key] = cb.checked; save(); applyPrefs(); if (onChange) onChange(); };
+  return row({ ...o, trail: sw });
+}
+function segRow(label, key, options, onPick) { // wybór jednej z kilku opcji
+  const seg = h("div", { class: "seg", role: "radiogroup", "aria-label": label });
+  for (const [val, text] of options) {
+    seg.append(h("button", { type: "button", role: "radio", "aria-checked": String(state.prefs[key] === val), class: state.prefs[key] === val ? "on" : "", onclick: () => { state.prefs[key] = val; save(); applyPrefs(); if (onPick) onPick(val); renderSettings(); } }, text));
+  }
+  return h("div", { class: "seg-row" }, h("div", { class: "seg-l" }, label), seg);
+}
+const chevron = () => h("span", { class: "chev", html: ic("chev") });
+function goSection(sec) {
+  settingsSec = sec;
+  try { history.pushState({ page: "#settings", sec }, ""); } catch {}
+  renderSettings();
+  $("#setBody").scrollTop = 0;
+}
 function renderSettings() {
   const body = $("#setBody");
   body.replaceChildren();
-  const net = netStatus === "online" ? "online" : netStatus === "error" ? "brak połączenia" : "łączenie…";
-  body.append(h("div", { class: "profile" }, avatar(meKey()), h("h3", {}, state.me.nick), h("div", { class: "sub" }, net),
-    h("div", { class: "quick" }, quickBtn("copy", "Kopiuj nick", copyNick), quickBtn("share", "Zaproś", shareNick))));
-  const grid = h("div", { class: "themes" });
-  for (const t of THEMES) {
-    grid.append(h("button", { type: "button", class: "theme" + (state.theme === t.id ? " active" : ""), "aria-pressed": state.theme === t.id ? "true" : "false", onclick: () => { state.theme = t.id; save(); render(); renderSettings(); } },
-      h("span", { class: "tprev", style: `background:${t.wall}` }, h("i", { style: `background:${t.other}` }), h("i", { class: "m", style: `background:${t.mine}` })),
-      h("span", { class: "tname" }, t.name)));
+  $("#setTitle").textContent = settingsSec === "main" ? "Ustawienia" : SECTIONS[settingsSec];
+  const P = state.prefs;
+  if (settingsSec === "main") {
+    const me = meKey();
+    const net = netStatus === "online" ? "online" : netStatus === "error" ? "brak połączenia" : "łączenie…";
+    body.append(h("button", { class: "me-row", onclick: () => goSection("profil") }, avatar(me, "lg2"),
+      h("span", { class: "row-t" }, h("b", {}, state.me.nick), h("small", {}, state.profile.about || "Dodaj opis „O mnie”…")),
+      h("span", { class: "net-dot " + netStatus, title: net }), chevron()));
+    body.append(h("div", { class: "box" },
+      row({ icon: "lock", label: "Prywatność", sub: "potwierdzenia odczytu, „pisze…”", onClick: () => goSection("prywatnosc"), trail: chevron() }),
+      row({ icon: "chat", label: "Czaty", sub: "motyw, tapeta, rozmiar czcionki", onClick: () => goSection("czaty"), trail: chevron() }),
+      row({ icon: "bell", label: "Powiadomienia", sub: state.pushOn ? "dzwonek przy zamkniętej aplikacji włączony" : "dzwonek, dźwięki, wibracje", onClick: () => goSection("powiadomienia"), trail: chevron() }),
+      row({ icon: "download", label: "Kopia i pamięć", sub: "kopia zapasowa, czyszczenie", onClick: () => goSection("kopia"), trail: chevron() }),
+      row({ icon: "info", label: "Pomoc i informacje", sub: "jak to działa, wersja", onClick: () => goSection("info"), trail: chevron() })));
+    body.append(h("div", { class: "box" },
+      row({ icon: "share", label: "Zaproś znajomych", sub: `twój nick: ${state.me.nick}`, onClick: shareNick }),
+      row({ icon: "logout", label: "Wyloguj", sub: "usuwa dane z tego telefonu", danger: true, onClick: logout })));
+    body.append(h("p", { class: "foot" }, "Plotkarki · wiadomości i rozmowy idą bezpośrednio między telefonami"));
+    return;
   }
-  body.append(h("div", { class: "box" }, h("div", { class: "box-h" }, "Wygląd"), grid));
-  const sw = h("label", { class: "switch" }, h("input", { type: "checkbox", id: "soundToggle", "aria-label": "Dźwięki" }), h("span", {}));
-  const cb = sw.querySelector("input");
-  cb.checked = state.sound;
-  cb.onchange = () => { state.sound = cb.checked; save(); };
-  body.append(h("div", { class: "box" }, h("div", { class: "box-h" }, "Powiadomienia"),
-    row({ icon: "phone", label: "Dzwonek, gdy Plotkarki są zamknięte", sub: state.pushOn ? "włączony · przez aplikację ntfy" : "wyłączony · stuknij, żeby włączyć", onClick: setupPush, trail: h("span", { class: "pill-state" + (state.pushOn ? " on" : "") }, state.pushOn ? "WŁ." : "WYŁ.") }),
-    row({ icon: "bell", label: "Dźwięki w aplikacji", sub: "dzwonek i nowe wiadomości", trail: sw })));
-  body.append(h("div", { class: "box" },
-    row({ icon: "share", label: "Zaproś znajomych", sub: `twój nick: ${state.me.nick}`, onClick: shareNick }),
-    row({ icon: "logout", label: "Wyloguj", sub: "usuwa dane z tego telefonu", danger: true, onClick: logout })));
-  body.append(h("p", { class: "foot" }, "Plotkarki · wiadomości i rozmowy idą bezpośrednio między telefonami"));
+  if (settingsSec === "profil") {
+    const about = h("input", { id: "aboutInput", maxlength: 80, placeholder: "np. zawsze w temacie 👀", autocomplete: "off" });
+    about.value = state.profile.about || "";
+    const saveAbout = () => { const v = about.value.trim().slice(0, 80); if (v !== (state.profile.about || "")) { state.profile.about = v; save(); sayHelloAll(); toast("Zapisano opis"); } };
+    about.onchange = saveAbout;
+    about.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); about.blur(); } };
+    const colors = h("div", { class: "swatches", role: "radiogroup", "aria-label": "Kolor awatara" });
+    for (const c of AV_COLORS) {
+      const on = (state.profile.color || pal(meKey())[0]) === c;
+      colors.append(h("button", { type: "button", role: "radio", "aria-checked": String(on), "aria-label": `Kolor ${c}`, class: on ? "on" : "", style: `background:${c}`, onclick: () => { state.profile.color = c; save(); sayHelloAll(); render(); renderSettings(); } }));
+    }
+    const emos = h("div", { class: "emojis" });
+    emos.append(h("button", { type: "button", class: !state.profile.emoji ? "on" : "", "aria-label": "Litera z nicku", onclick: () => { state.profile.emoji = null; save(); sayHelloAll(); render(); renderSettings(); } }, state.me.nick.slice(0, 1).toUpperCase()));
+    for (const e of AV_EMOJI) {
+      emos.append(h("button", { type: "button", class: state.profile.emoji === e ? "on" : "", "aria-label": `Emotka ${e}`, onclick: () => { state.profile.emoji = e; save(); sayHelloAll(); render(); renderSettings(); } }, e));
+    }
+    body.append(h("div", { class: "profile" }, avatar(meKey()), h("h3", {}, state.me.nick), h("div", { class: "sub" }, "Nicku nie da się zmienić – to twój adres w Plotkarkach.")));
+    body.append(h("div", { class: "box pad" }, h("label", { class: "field" }, h("span", { class: "lbl" }, "O mnie"), about), h("div", { class: "hint" }, "Znajomi zobaczą to w twoim profilu.")));
+    body.append(h("div", { class: "box pad" }, h("div", { class: "field" }, h("span", { class: "lbl" }, "Kolor awatara"), colors)));
+    body.append(h("div", { class: "box pad" }, h("div", { class: "field" }, h("span", { class: "lbl" }, "Awatar: litera albo emotka"), emos)));
+    body.append(h("div", { class: "box" }, row({ icon: "copy", label: "Kopiuj nick", sub: state.me.nick, onClick: copyNick })));
+    return;
+  }
+  if (settingsSec === "prywatnosc") {
+    body.append(h("div", { class: "box" },
+      swRow({ icon: "ticks", label: "Potwierdzenia odczytu", sub: "niebieskie ✓✓, gdy ktoś przeczyta. Po wyłączeniu nie wysyłasz ich i nie widzisz cudzych." }, "receipts", () => renderSoon()),
+      swRow({ icon: "eye", label: "Pokazuj, że piszę", sub: "znajomi widzą „pisze…”, gdy coś wpisujesz" }, "typing")));
+    body.append(h("p", { class: "foot left" }, "Wiadomości i rozmowy nie przechodzą przez żaden serwer: lecą bezpośrednio między telefonami i są szyfrowane. Historia jest zapisana tylko na twoim telefonie."));
+    return;
+  }
+  if (settingsSec === "czaty") {
+    const grid = h("div", { class: "themes" });
+    for (const t of THEMES) {
+      grid.append(h("button", { type: "button", class: "theme" + (state.theme === t.id ? " active" : ""), "aria-pressed": state.theme === t.id ? "true" : "false", onclick: () => { state.theme = t.id; save(); render(); renderSettings(); } },
+        h("span", { class: "tprev", style: `background:${t.wall}` }, h("i", { style: `background:${t.other}` }), h("i", { class: "m", style: `background:${t.mine}` })),
+        h("span", { class: "tname" }, t.name)));
+    }
+    body.append(h("div", { class: "box" }, h("div", { class: "box-h" }, "Motyw"), grid));
+    const sample = h("div", { class: "fs-sample" }, h("div", { class: "msg" }, h("span", { class: "txt" }, "Słyszałeś, co było wczoraj? 👀")), h("div", { class: "msg mine" }, h("span", { class: "txt" }, "Opowiadaj!")));
+    body.append(h("div", { class: "box" }, h("div", { class: "box-h" }, "Tekst i tło"),
+      segRow("Rozmiar czcionki", "font", [["s", "Mała"], ["m", "Średnia"], ["l", "Duża"]]),
+      sample,
+      swRow({ icon: "image", label: "Wzorek w tle czatu", sub: "delikatne rysunki na tapecie" }, "wall"),
+      swRow({ icon: "send", label: "Enter wysyła wiadomość", sub: "wyłącz, jeśli wolisz Enterem robić nową linię" }, "enter")));
+    return;
+  }
+  if (settingsSec === "powiadomienia") {
+    body.append(h("div", { class: "box" }, h("div", { class: "box-h" }, "Gdy Plotkarki są zamknięte"),
+      row({ icon: "phone", label: "Dzwonek i powiadomienia", sub: state.pushOn ? "włączone · przez aplikację ntfy" : "wyłączone · stuknij, żeby włączyć", onClick: setupPush, trail: h("span", { class: "pill-state" + (state.pushOn ? " on" : "") }, state.pushOn ? "WŁ." : "WYŁ.") })));
+    const snd = h("label", { class: "switch" }, h("input", { type: "checkbox", "aria-label": "Dźwięki" }), h("span", {}));
+    const sc = snd.querySelector("input");
+    sc.checked = state.sound;
+    sc.onchange = () => { state.sound = sc.checked; save(); };
+    body.append(h("div", { class: "box" }, h("div", { class: "box-h" }, "W aplikacji"),
+      row({ icon: "bell", label: "Dźwięki", sub: "dzwonek i nowe wiadomości", trail: snd }),
+      swRow({ icon: "vibrate", label: "Wibracje", sub: "przy dzwonieniu i nowych wiadomościach" }, "vibrate"),
+      segRow("Melodia dzwonka", "ringtone", RINGTONES.map((r) => [r.id, r.name]), () => previewRing()),
+      row({ icon: "music", label: "Posłuchaj dzwonka", sub: RINGTONES.find((r) => r.id === state.prefs.ringtone).name, onClick: previewRing })));
+    return;
+  }
+  if (settingsSec === "kopia") {
+    const kb = Math.max(1, Math.round(new Blob([JSON.stringify(state)]).size / 1024));
+    const msgs = Object.values(state.dms).reduce((n, l) => n + l.length, 0) + state.groups.reduce((n, g) => n + g.messages.length + Object.values(g.notes || {}).reduce((a, l) => a + l.length, 0), 0);
+    body.append(h("div", { class: "box" }, h("div", { class: "box-h" }, "Kopia zapasowa"),
+      h("p", { class: "box-p" }, "Wszystko jest zapisane tylko na tym telefonie. Zrób kopię, żeby nie stracić historii przy zmianie telefonu albo czyszczeniu przeglądarki."),
+      row({ icon: "download", label: "Zapisz kopię do pliku", sub: "plik .json w Pobranych", onClick: backup }),
+      row({ icon: "upload", label: "Przywróć z kopii", sub: "wczytaj wcześniej zapisany plik", onClick: () => $("#restoreFile").click() })));
+    body.append(h("div", { class: "box" }, h("div", { class: "box-h" }, "Pamięć"),
+      row({ icon: "info", label: `${kb} KB`, sub: `${msgs} wiadomości i wpisów, ${state.contacts.length} znajomych, ${state.groups.length} grupek` }),
+      row({ icon: "trash", label: "Wyczyść historię wszystkich czatów", sub: "znajomi i grupki zostają", danger: true, onClick: clearAllHistory })));
+    return;
+  }
+  if (settingsSec === "info") {
+    const item = (q, a) => h("details", { class: "faq" }, h("summary", {}, q), h("p", {}, a));
+    body.append(h("div", { class: "profile" }, h("span", { html: '<svg class="ic face"><use href="#i-logo"/></svg>' }), h("h3", {}, "Plotkarki"), h("div", { class: "sub" }, `wersja ${APP_VERSION}`)));
+    body.append(h("div", { class: "box faqs" },
+      item("Jak dodać znajomego?", "Stuknij + po lewej i wpisz jego nick. Od razu jesteście w znajomych."),
+      item("Jak działają notatniki?", "W każdej grupce każdy ma swój notatnik. Piszesz tylko w swoim, a wszyscy z grupki go czytają i reagują emoji."),
+      item("Czy mogę zadzwonić do kogoś offline?", "Tak, jeśli ta osoba włączyła dzwonek w Ustawienia → Powiadomienia. Dostanie powiadomienie, a po otwarciu Plotkarek rozmowa połączy się sama."),
+      item("Gdzie są zapisane moje wiadomości?", "Tylko na twoim telefonie. Wiadomości lecą bezpośrednio między telefonami. Zrób kopię zapasową w Ustawienia → Kopia i pamięć."),
+      item("Co znaczą ptaszki?", "✓ – czeka na wysłanie (kolega offline). ✓✓ szare – doszło. ✓✓ niebieskie – przeczytane.")));
+    return;
+  }
+}
+function previewRing() { unlockAudio(); ringOnce(); }
+function backup() {
+  const blob = new Blob([JSON.stringify({ app: "plotkarki", saved: new Date().toISOString(), state }, null, 1)], { type: "application/json" });
+  const a = h("a", { href: URL.createObjectURL(blob), download: `plotkarki-kopia-${new Date().toISOString().slice(0, 10)}.json` });
+  document.body.append(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+  toast("Kopia zapisana w Pobranych");
+}
+async function restore(file) {
+  let data;
+  try { data = JSON.parse(await file.text()); } catch { return toast("To nie jest plik kopii Plotkarek"); }
+  const s = data && data.app === "plotkarki" ? data.state : null;
+  if (!s || s.v !== 2 || !s.me || !NICK_RE.test(s.me.nick || "")) return toast("To nie jest plik kopii Plotkarek");
+  const other = k(s.me.nick) !== meKey();
+  const r = await ask({ title: "Przywrócić kopię?", text: other ? `Ta kopia należy do konta „${s.me.nick}”. Zastąpi wszystko na tym telefonie i przełączy cię na to konto.` : "Obecne wiadomości na tym telefonie zostaną zastąpione kopią.", ok: "Przywróć", danger: true });
+  if (!r) return;
+  try { localStorage.setItem(KEY, JSON.stringify(s)); } catch { return toast("Nie udało się zapisać kopii"); }
+  try { peer && peer.destroy(); } catch {}
+  location.replace(location.pathname + location.search);
+}
+async function clearAllHistory() {
+  const r = await ask({ title: "Wyczyścić historię?", text: "Znikną wszystkie wiadomości i wpisy w notatnikach na tym telefonie. Znajomi i grupki zostają.", ok: "Wyczyść", danger: true });
+  if (!r) return;
+  for (const key of Object.keys(state.dms)) state.dms[key] = [];
+  for (const g of state.groups) { g.messages = []; g.notes = {}; }
+  state.unread = {};
+  save(); render(); renderSettings();
+  toast("Historia wyczyszczona");
 }
 function setupPush() {
   const topic = ensureTopic();
@@ -1063,7 +1312,7 @@ function setupPush() {
 }
 function openSheet(title, node) { $("#sheetTitle").textContent = title; $("#sheetBody").replaceChildren(node); $("#sheet").hidden = false; }
 function closeSheet() { $("#sheet").hidden = true; }
-function openSettings() { renderSettings(); openPage("#settings"); }
+function openSettings() { settingsSec = "main"; renderSettings(); openPage("#settings"); }
 async function copyNick() { try { await navigator.clipboard.writeText(state.me.nick); toast("Nick skopiowany"); } catch { toast(state.me.nick); } }
 async function logout() {
   const r = await ask({ title: "Wylogować?", text: "Znikną wpisy, czaty i znajomi zapisani na tym telefonie. Twój nick znowu będzie wolny.", ok: "Wyloguj", danger: true });
@@ -1451,7 +1700,11 @@ function wireUI() {
   $("#plus").onclick = (e) => { if (e.target.id === "plus") closePlus(); };
   $("#railMe").onclick = openSettings;
   $("#openSettings").onclick = openSettings;
-  $("#closeSettings").onclick = () => closePage("#settings");
+  $("#closeSettings").onclick = () => { if (settingsSec !== "main") history.back(); else closePage("#settings"); };
+  $("#restoreFile").onchange = (e) => { const f = e.target.files[0]; e.target.value = ""; if (f) restore(f); };
+  const feedEl = $("#feed"), toBottom = $("#toBottom");
+  feedEl.addEventListener("scroll", () => { toBottom.hidden = !state.current || feedEl.scrollHeight - feedEl.scrollTop - feedEl.clientHeight < 400; }, { passive: true });
+  toBottom.onclick = () => feedEl.scrollTo({ top: feedEl.scrollHeight, behavior: "smooth" });
   $("#closeInfo").onclick = () => closePage("#info");
   $("#titleBox").onclick = () => openInfo();
   $("#roomAv").onclick = () => openInfo();
@@ -1479,7 +1732,7 @@ function wireUI() {
   $("#closeSheet").onclick = closeSheet;
   $("#sheet").onclick = (e) => { if (e.target.id === "sheet") closeSheet(); };
   input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey && !e.isComposing && matchMedia("(hover: hover)").matches) { e.preventDefault(); $("#composer").requestSubmit(); }
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing && state.prefs.enter) { e.preventDefault(); $("#composer").requestSubmit(); }
   });
   $("#composer").onsubmit = (e) => {
     e.preventDefault();
@@ -1537,7 +1790,7 @@ function showWelcome() {
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
 // Sprawdzanie aktualizacji: przy powrocie do aplikacji i co 5 minut. Nowa wersja = automatyczne przeładowanie
 // (dane są zapisane w telefonie, więc nic nie ginie). Nie przeładowujemy w trakcie rozmowy ani pisania.
-const APP_VERSION = 11;
+const APP_VERSION = 12;
 async function checkUpdate() {
   try {
     const r = await fetch("version.json?t=" + Date.now(), { cache: "no-store" });
