@@ -8,12 +8,12 @@ const PREFIX = "paleta-app-v1-";
 const NICK_RE = /^[A-Za-z0-9_]{3,16}$/;
 const KEY_RE = /^[a-z0-9_]{3,16}$/;
 const THEMES = [
-  { id: "noc", name: "Noc", sw: "linear-gradient(135deg,#111b21 50%,#00a884 50%)" },
-  { id: "dzien", name: "Dzień", sw: "linear-gradient(135deg,#efeae2 50%,#008069 50%)" },
-  { id: "fiolet", name: "Fiolet", sw: "linear-gradient(135deg,#14121c 50%,#8b5cf6 50%)" },
-  { id: "pastel", name: "Pastel", sw: "linear-gradient(135deg,#fffaf9 50%,#e0457b 50%)" },
-  { id: "ocean", name: "Ocean", sw: "linear-gradient(135deg,#0c1622 50%,#3aa6f0 50%)" },
-  { id: "zachod", name: "Zachód", sw: "linear-gradient(135deg,#1a1012 50%,#f97316 50%)" },
+  { id: "noc", name: "Noc", wall: "#0b141a", other: "#202c33", mine: "#005c4b" },
+  { id: "dzien", name: "Dzień", wall: "#efeae2", other: "#ffffff", mine: "#d9fdd3" },
+  { id: "fiolet", name: "Fiolet", wall: "#0f0d16", other: "#262233", mine: "#4c2f8f" },
+  { id: "pastel", name: "Pastel", wall: "#fbefe9", other: "#ffffff", mine: "#ffd9e6" },
+  { id: "ocean", name: "Ocean", wall: "#08111b", other: "#13233a", mine: "#11497a" },
+  { id: "zachod", name: "Zachód", wall: "#130b0d", other: "#2a181c", mine: "#7a2e1a" },
 ];
 const GROUP_EMOJI = ["🔥", "🎮", "⚽", "🎧", "🍕", "😈", "👻", "🌴"];
 const REACTIONS = ["😂", "😱", "🔥", "👀"];
@@ -66,6 +66,11 @@ function migrate(s) {
     }
   }
   s.view ||= {};
+  for (const p of [...(s.pending || []), ...(s.requests || [])]) {
+    if (!s.contacts.some((c) => c.id === p.id)) s.contacts.push({ id: p.id, nick: p.nick });
+  }
+  s.pending = [];
+  s.requests = [];
   if (!THEMES.some((t) => t.id === s.theme)) s.theme = s.theme === "neon" ? "fiolet" : "noc";
   return s;
 }
@@ -172,13 +177,20 @@ function ask(o) {
       }
       body.append(h("div", { class: "field" }, h("span", { class: "lbl" }, "Ikonka grupki"), row));
     }
-    if (o.people) {
+    if (o.people && !o.people.length && o.extra) {
+      body.append(h("p", { class: "ask-text" }, "Nie masz jeszcze znajomych na liście. Wpisz ich nicki poniżej."));
+    } else if (o.people) {
       const box = h("div", { class: "field" }, h("span", { class: "lbl" }, o.peopleLabel || "Wybierz osoby"));
       for (const p of o.people) {
         const cb = h("input", { type: o.single ? "radio" : "checkbox", name: "pp", value: p.id });
         box.append(h("label", { class: "pick" }, cb, avatar(p.id, "sm"), h("span", { class: "nm" }, nameOf(p.id)), online.has(p.id) ? null : h("span", { class: "off" }, "offline")));
       }
       body.append(box);
+    }
+    let extra = null;
+    if (o.extra) {
+      extra = h("input", { id: "askExtra", maxlength: 200, placeholder: o.extra.placeholder || "", autocomplete: "off", autocapitalize: "none", autocorrect: "off", spellcheck: "false" });
+      body.append(h("label", { class: "field" }, h("span", { class: "lbl" }, o.extra.label || ""), extra));
     }
     $("#askTitle").textContent = o.title;
     const ok = $("#askOk");
@@ -192,9 +204,10 @@ function ask(o) {
       const value = input ? input.value.trim().replace(/^@/, "") : "";
       if (input && !value) { err.textContent = "Wpisz coś"; return input.focus(); }
       const picked = [...body.querySelectorAll(".pick input:checked")].map((x) => x.value);
-      const bad = o.validate && o.validate({ value, picked });
+      const ex = extra ? extra.value.trim() : "";
+      const bad = o.validate && o.validate({ value, picked, extra: ex });
       if (bad) { err.textContent = bad; return; }
-      done({ value, picked, emoji });
+      done({ value, picked, emoji, extra: ex });
     };
     $("#askClose").onclick = () => done(null);
     sheet.onclick = (e) => { if (e.target === sheet) done(null); };
@@ -256,14 +269,18 @@ function onPeerError(err) {
     if (key) {
       connecting.delete(key);
       if (online.delete(key)) renderSoon();
-      if (call && call.key === key && !call.connected) endCall(`${nameOf(key)} jest teraz offline`, false);
+      if (call && call.peers.has(key) && !call.peers.get(key).connected) removePeer(key);
     }
   } else if (["network", "server-error", "socket-error", "socket-closed"].includes(err.type)) {
     setNet("connecting");
   }
 }
 function watchKeys() {
-  return new Set([...state.contacts.map((c) => c.id), ...state.pending.map((c) => c.id), ...Object.keys(state.outbox)]);
+  if (!state.me) return new Set();
+  const keys = new Set([...state.contacts.map((c) => c.id), ...Object.keys(state.outbox)]);
+  for (const g of state.groups) for (const m of g.members) keys.add(m.id);
+  keys.delete(meKey());
+  return keys;
 }
 function sweep() {
   if (!peerOpen) return;
@@ -371,10 +388,10 @@ function addUnique(list, e) {
 }
 function becomeContacts(key, nick) {
   state.names[key] = nick;
-  if (!isContact(key)) state.contacts.push({ id: key, nick });
-  state.pending = state.pending.filter((p) => p.id !== key);
-  state.requests = state.requests.filter((p) => p.id !== key);
+  const c = state.contacts.find((x) => x.id === key);
+  if (c) c.nick = nick; else state.contacts.push({ id: key, nick });
 }
+const inGroupWith = (key) => state.groups.some((g) => g.members.some((m) => m.id === key));
 function onData(from, d, conn) {
   if (!d || typeof d !== "object") return;
   if (d.t === "ack") {
@@ -384,7 +401,7 @@ function onData(from, d, conn) {
     return;
   }
   if (typeof d.m === "string" && d.m.length <= 24) { try { conn.send({ t: "ack", m: d.m }); } catch {} }
-  const known = isContact(from);
+  const known = isContact(from) || inGroupWith(from);
   switch (d.t) {
     case "hello":
       if (known && typeof d.nick === "string" && NICK_RE.test(d.nick) && k(d.nick) === from) {
@@ -394,30 +411,16 @@ function onData(from, d, conn) {
         save(); renderSoon();
       }
       return;
-    case "freq": {
+    case "fadd": case "freq": case "facc": { // ktoś dodał mnie po nicku – od razu jest w znajomych
       if (typeof d.nick !== "string" || !NICK_RE.test(d.nick) || k(d.nick) !== from) return;
-      if (known || state.pending.some((p) => p.id === from)) {
-        becomeContacts(from, d.nick);
-        try { conn.send({ t: "facc", nick: state.me.nick }); } catch {}
-        toast(`${d.nick} jest już w znajomych`);
-      } else if (!state.requests.some((r) => r.id === from) && state.requests.length < 20) {
-        state.requests.push({ id: from, nick: d.nick });
-        state.names[from] = d.nick;
-        ping();
-      }
+      const was = isContact(from);
+      becomeContacts(from, d.nick);
       save(); renderSoon();
+      if (!was) { toast(`${d.nick} dodał(a) cię do znajomych`); ping(); }
       return;
     }
-    case "facc":
-      if (typeof d.nick === "string" && NICK_RE.test(d.nick) && k(d.nick) === from && state.pending.some((p) => p.id === from)) {
-        becomeContacts(from, d.nick);
-        save(); renderSoon();
-        toast(`${d.nick} przyjął(ęła) twoje zaproszenie`);
-        ping();
-      }
-      return;
   }
-  if (!known) return;
+  if (!known && d.t !== "gnew") return;
   applyEvent(from, d);
 }
 function groupOf(gid, from) {
@@ -434,16 +437,30 @@ function applyEvent(from, d) {
     }
     case "gnew": {
       const g = d.g;
-      if (!g || typeof g.id !== "string" || state.groups.some((x) => x.id === g.id) || !Array.isArray(g.members)) return;
+      if (!g || typeof g.id !== "string" || !Array.isArray(g.members)) return;
       const members = g.members.slice(0, 30).filter((m) => m && KEY_RE.test(m.id) && NICK_RE.test(m.nick || "") && k(m.nick) === m.id);
       if (!members.some((m) => m.id === meKey()) || !members.some((m) => m.id === from)) return;
       members.forEach((m) => { if (!state.names[m.id]) state.names[m.id] = m.nick; });
+      const ex = state.groups.find((x) => x.id === g.id);
+      if (ex) {
+        if (!ex.members.some((m) => m.id === from)) return;
+        for (const m of members) if (!ex.members.some((x) => x.id === m.id)) ex.members.push(m);
+        save(); renderSoon();
+        return;
+      }
       state.groups.unshift({
         id: g.id.slice(0, 24), name: String(g.name || "Grupka").slice(0, 40), emoji: String(g.emoji || "💬").slice(0, 8), members,
         notes: {}, messages: [],
       });
       toast(`${nameOf(from)} dodał(a) cię do grupki „${state.groups[0].name}”`);
       ping(); save(); renderSoon();
+      return;
+    }
+    case "gleave": {
+      const g = groupOf(d.gid, from);
+      if (!g) return;
+      g.members = g.members.filter((m) => m.id !== from);
+      save(); renderSoon();
       return;
     }
     case "note": {
@@ -473,15 +490,8 @@ function applyEvent(from, d) {
       save(); renderSoon();
       return;
     }
-    case "cmode":
-      if (call && call.key === from && ["audio", "video", "screen"].includes(d.mode)) {
-        call.remoteMode = d.mode;
-        updateCallUI();
-      }
-      return;
-    case "cend":
-      if (call && call.key === from) endCall(call.connected ? "Rozmowa zakończona" : `${nameOf(from)} nie może teraz rozmawiać`, false);
-      else if (incoming && incoming.from === from) { dropIncoming(); toast(`Nieodebrane połączenie od ${nameOf(from)}`); }
+    case "cmode": case "cend": case "cjoin":
+      onCallEvent(from, d);
       return;
   }
 }
@@ -498,12 +508,7 @@ function curGroup() {
 function viewOf(g) {
   const v = state.view[g.id];
   if (v === "chat" || (v && g.members.some((m) => m.id === v))) return v;
-  let best = null, ts = 0;
-  for (const m of g.members) {
-    const l = (g.notes || {})[m.id] || [];
-    if (l.length && l[l.length - 1].ts > ts) { ts = l[l.length - 1].ts; best = m.id; }
-  }
-  return best || meKey();
+  return "chat";
 }
 const plural = (n) => `${n} ${n === 1 ? "osoba" : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 > 20) ? "osoby" : "osób"}`;
 function render() {
@@ -542,13 +547,11 @@ function renderRail() {
       onClick: () => openRoom({ type: "dm", id: c.id }),
     }));
   }
-  for (const p of state.pending) cl.append(railItem({ av: avatar(p.id), label: p.nick, dim: true }));
   if (!cl.children.length) cl.append(h("div", { class: "rail-hint" }, "brak"));
   const av = avatar(meKey());
   av.classList.remove("on");
   av.classList.add(netStatus === "online" ? "on" : netStatus === "error" ? "bad" : "wait");
   $("#railMe").replaceChildren(av, h("span", { class: "lbl" }, state.me.nick));
-  $("#reqDot").hidden = !state.requests.length;
 }
 
 let lastFeedId = "";
@@ -700,8 +703,7 @@ function renderChat(feed, list, isGroup) {
 /* ============ Akcje ============ */
 function pickView(g) {
   for (const m of g.members) if (state.unread[`n:${g.id}:${m.id}`]) return m.id;
-  if (state.unread[`g:${g.id}`]) return "chat";
-  return viewOf(g);
+  return "chat";
 }
 function openRoom(r) {
   state.current = r;
@@ -728,78 +730,209 @@ function send(text) {
   save();
   render();
 }
+const parseNicks = (text) => [...new Set(String(text || "").split(/[\s,;]+/).map((x) => x.replace(/^@/, "")).filter(Boolean))];
+function addContactByNick(nick) {
+  const key = k(nick);
+  const was = isContact(key);
+  becomeContacts(key, state.names[key] && k(state.names[key]) === key ? state.names[key] : nick);
+  if (!was) sendTo(key, { t: "fadd", nick: state.me.nick });
+  return key;
+}
+function checkNicks(text) {
+  const bad = parseNicks(text).find((n) => !NICK_RE.test(n));
+  return bad ? `Zły nick: „${bad}”. Nick ma 3–16 znaków: litery, cyfry lub _` : "";
+}
 async function addFriend() {
   const r = await ask({
     title: "Dodaj znajomego",
-    text: "Wpisz nick kolegi. Dostanie prośbę, a po jej przyjęciu możecie pisać i dzwonić.",
-    input: { placeholder: "nick kolegi", maxLength: 16, nick: true },
-    ok: "Wyślij prośbę",
+    text: "Wpisz nick. Od razu trafi do twoich znajomych, a ty do jego.",
+    input: { placeholder: "nick, np. kuba_07", maxLength: 16, nick: true },
+    ok: "Dodaj",
     validate: ({ value }) => {
-      if (!NICK_RE.test(value)) return "Nick: 3–16 znaków, litery, cyfry lub _";
-      if (k(value) === meKey()) return "To twój własny nick :)";
+      if (!NICK_RE.test(value)) return "Nick ma 3–16 znaków: litery, cyfry lub _";
+      if (k(value) === meKey()) return "To twój własny nick";
       if (isContact(k(value))) return "Ta osoba już jest w znajomych";
-      if (state.pending.some((p) => p.id === k(value))) return "Prośba do tej osoby już poszła";
       return "";
     },
   });
   if (!r) return;
-  const key = k(r.value);
-  const inc = state.requests.find((x) => x.id === key);
-  if (inc) { // on już prosił – przyjmujemy od razu
-    becomeContacts(key, inc.nick);
-    sendTo(key, { t: "facc", nick: state.me.nick });
-    save(); render();
-    return toast(`${inc.nick} jest teraz w znajomych`);
-  }
-  state.pending.push({ id: key, nick: r.value });
-  state.names[key] = r.value;
-  sendTo(key, { t: "freq", nick: state.me.nick });
-  save(); render();
-  toast(`Prośba poszła do ${r.value}. Zobaczy ją, gdy wejdzie do Palety.`);
+  const key = addContactByNick(r.value);
+  save();
+  openRoom({ type: "dm", id: key });
+  const on = await ensureOnline(key, 2500);
+  toast(on ? `Dodano ${r.value}` : `Dodano ${r.value}. Jest teraz offline, zobaczy cię, gdy wejdzie.`);
 }
+const groupWire = (g) => ({ id: g.id, name: g.name, emoji: g.emoji, members: g.members });
 async function addGroup() {
-  if (!state.contacts.length) { toast("Najpierw dodaj znajomego po nicku"); return addFriend(); }
   const r = await ask({
-    title: "Nowa grupka", input: { placeholder: "Nazwa grupki", maxLength: 30 }, emojis: true,
-    people: state.contacts, peopleLabel: "Kto jest w grupce?", ok: "Utwórz",
-    validate: ({ picked }) => (picked.length ? "" : "Zaznacz przynajmniej jedną osobę"),
+    title: "Nowa grupka",
+    input: { placeholder: "Nazwa grupki", maxLength: 30 },
+    emojis: true,
+    people: state.contacts, peopleLabel: "Zaznacz, kogo dodać (możesz kilka osób)",
+    extra: { label: state.contacts.length ? "Albo wpisz nicki" : "Nicki osób", placeholder: "np. kuba, olek, szymon" },
+    ok: "Utwórz grupkę",
+    validate: ({ picked, extra }) => {
+      const bad = checkNicks(extra);
+      if (bad) return bad;
+      if (!picked.length && !parseNicks(extra).some((n) => k(n) !== meKey())) return "Dodaj przynajmniej jedną osobę";
+      return "";
+    },
   });
   if (!r) return;
+  const ids = new Set(r.picked);
+  for (const n of parseNicks(r.extra)) if (k(n) !== meKey()) ids.add(addContactByNick(n));
   const g = {
     id: uid(), name: r.value, emoji: r.emoji,
-    members: [{ id: meKey(), nick: state.me.nick }, ...r.picked.map((id) => ({ id, nick: nameOf(id) }))],
+    members: [{ id: meKey(), nick: state.me.nick }, ...[...ids].map((id) => ({ id, nick: nameOf(id) }))],
     notes: {}, messages: [],
   };
   state.groups.unshift(g);
   save();
-  broadcast(g, { t: "gnew", g: { id: g.id, name: g.name, emoji: g.emoji, members: g.members } });
+  broadcast(g, { t: "gnew", g: groupWire(g) });
   openRoom({ type: "group", id: g.id });
+  toast(`Grupka „${g.name}” gotowa: ${plural(g.members.length)}`);
 }
-function acceptRequest(r) {
-  becomeContacts(r.id, r.nick);
-  sendTo(r.id, { t: "facc", nick: state.me.nick });
-  save(); render(); renderPlus();
-  toast(`${r.nick} jest teraz w twoich znajomych`);
+async function addMembers(g) {
+  const avail = state.contacts.filter((c) => !g.members.some((m) => m.id === c.id));
+  const r = await ask({
+    title: `Dodaj do „${g.name}”`,
+    people: avail, peopleLabel: "Zaznacz osoby (możesz kilka)",
+    extra: { label: avail.length ? "Albo wpisz nicki" : "Nicki osób", placeholder: "np. kuba, olek" },
+    ok: "Dodaj",
+    validate: ({ picked, extra }) => {
+      const bad = checkNicks(extra);
+      if (bad) return bad;
+      const fresh = [...picked, ...parseNicks(extra).map(k)].filter((id) => id !== meKey() && !g.members.some((m) => m.id === id));
+      return fresh.length ? "" : "Wybierz kogoś, kogo jeszcze nie ma w grupce";
+    },
+  });
+  if (!r) return;
+  const ids = new Set(r.picked);
+  for (const n of parseNicks(r.extra)) if (k(n) !== meKey()) ids.add(addContactByNick(n));
+  const added = [...ids].filter((id) => !g.members.some((m) => m.id === id));
+  g.members.push(...added.map((id) => ({ id, nick: nameOf(id) })));
+  save();
+  broadcast(g, { t: "gnew", g: groupWire(g) });
+  render();
+  if (!$("#info").hidden) openInfo(true);
+  toast(added.length === 1 ? `Dodano ${nameOf(added[0])}` : `Dodano ${plural(added.length)}`);
+}
+async function leaveGroup(g) {
+  const r = await ask({ title: "Opuścić grupkę?", text: `Wyjdziesz z „${g.name}” i usuniesz ją z tego telefonu.`, ok: "Opuść", danger: true });
+  if (!r) return;
+  broadcast(g, { t: "gleave", gid: g.id });
+  state.groups = state.groups.filter((x) => x !== g);
+  state.current = null;
+  closePage("#info");
+  save(); render();
+}
+async function removeFriend(key) {
+  const r = await ask({ title: `Usunąć ${nameOf(key)}?`, text: "Zniknie z twoich znajomych, a wasza rozmowa zniknie z tego telefonu.", ok: "Usuń", danger: true });
+  if (!r) return;
+  state.contacts = state.contacts.filter((c) => c.id !== key);
+  delete state.dms[key];
+  state.current = null;
+  closePage("#info");
+  save(); render();
+}
+
+/* ---------- Strony: informacje i ustawienia ---------- */
+function openPage(sel) {
+  if (!$(sel).hidden) return;
+  $(sel).hidden = false;
+  try { history.pushState({ page: sel }, ""); } catch {}
+}
+function closePage(sel) {
+  if ($(sel).hidden) return;
+  $(sel).hidden = true;
+  try { if (history.state && history.state.page === sel) history.back(); } catch {}
+}
+window.addEventListener("popstate", () => { $("#info").hidden = true; $("#settings").hidden = true; });
+function row({ icon, av, label, sub, danger, accent, onClick, trail }) {
+  return h(onClick ? "button" : "div", { class: "row" + (danger ? " danger" : "") + (accent ? " accent" : ""), onclick: onClick },
+    av || (icon ? h("span", { class: "row-ic", html: ic(icon) }) : null),
+    h("span", { class: "row-t" }, label, sub ? h("small", {}, sub) : null), trail || null);
+}
+const quickBtn = (icon, label, fn) => h("button", { onclick: fn }, h("span", { html: ic(icon, icon === "callface" ? "big" : "") }), label);
+function openInfo(keepOpen) {
+  const g = curGroup();
+  const dm = state.current && state.current.type === "dm" ? state.current.id : null;
+  if (!g && !dm) return;
+  const body = $("#infoBody");
+  body.replaceChildren();
+  const callAnd = (mode) => () => { closePage("#info"); callFromHeader(mode); };
+  if (g) {
+    $("#infoTitle").textContent = "Informacje o grupce";
+    body.append(h("div", { class: "profile" }, h("span", { class: "avatar emoji" }, g.emoji), h("h3", {}, g.name),
+      h("div", { class: "sub" }, `Grupka · ${plural(g.members.length)}`),
+      h("div", { class: "quick" }, quickBtn("callface", "Zadzwoń", callAnd("audio")), quickBtn("video", "Wideo", callAnd("video")), quickBtn("userplus", "Dodaj", () => addMembers(g)))));
+    const box = h("div", { class: "box" }, h("div", { class: "box-h" }, plural(g.members.length)), row({ icon: "userplus", label: "Dodaj osoby", accent: true, onClick: () => addMembers(g) }));
+    const me = meKey();
+    const list = [...g.members].sort((a, b) => (b.id === me) - (a.id === me) || online.has(b.id) - online.has(a.id) || nameOf(a.id).localeCompare(nameOf(b.id)));
+    for (const m of list) {
+      const mine = m.id === me;
+      box.append(row({
+        av: avatar(m.id), label: mine ? `${state.me.nick} (Ty)` : nameOf(m.id),
+        sub: mine ? "to ty" : online.has(m.id) ? "online" : "offline",
+        onClick: mine ? null : () => { addContactByNick(nameOf(m.id)); save(); closePage("#info"); openRoom({ type: "dm", id: m.id }); },
+      }));
+    }
+    body.append(box, h("div", { class: "box" }, row({ icon: "logout", label: "Opuść grupkę", danger: true, onClick: () => leaveGroup(g) })));
+  } else {
+    $("#infoTitle").textContent = "Informacje o kontakcie";
+    body.append(h("div", { class: "profile" }, avatar(dm), h("h3", {}, nameOf(dm)), h("div", { class: "sub" }, online.has(dm) ? "online" : "offline"),
+      h("div", { class: "quick" }, quickBtn("callface", "Zadzwoń", callAnd("audio")), quickBtn("video", "Wideo", callAnd("video")), quickBtn("chat", "Napisz", () => closePage("#info")))));
+    const common = state.groups.filter((x) => x.members.some((m) => m.id === dm));
+    if (common.length) {
+      const box = h("div", { class: "box" }, h("div", { class: "box-h" }, `Wspólne grupki: ${common.length}`));
+      for (const x of common) box.append(row({ av: h("span", { class: "avatar emoji" }, x.emoji), label: x.name, sub: plural(x.members.length), onClick: () => { closePage("#info"); openRoom({ type: "group", id: x.id }); } }));
+      body.append(box);
+    }
+    body.append(h("div", { class: "box" }, row({ icon: "trash", label: `Usuń ${nameOf(dm)} ze znajomych`, danger: true, onClick: () => removeFriend(dm) })));
+  }
+  if (keepOpen !== true || $("#info").hidden) openPage("#info");
+}
+function renderSettings() {
+  const body = $("#setBody");
+  body.replaceChildren();
+  const net = netStatus === "online" ? "online" : netStatus === "error" ? "brak połączenia" : "łączenie…";
+  body.append(h("div", { class: "profile" }, avatar(meKey()), h("h3", {}, state.me.nick), h("div", { class: "sub" }, net),
+    h("div", { class: "quick" }, quickBtn("copy", "Kopiuj nick", copyNick), quickBtn("share", "Zaproś", shareNick))));
+  const grid = h("div", { class: "themes" });
+  for (const t of THEMES) {
+    grid.append(h("button", { type: "button", class: "theme" + (state.theme === t.id ? " active" : ""), "aria-pressed": state.theme === t.id ? "true" : "false", onclick: () => { state.theme = t.id; save(); render(); renderSettings(); } },
+      h("span", { class: "tprev", style: `background:${t.wall}` }, h("i", { style: `background:${t.other}` }), h("i", { class: "m", style: `background:${t.mine}` })),
+      h("span", { class: "tname" }, t.name)));
+  }
+  body.append(h("div", { class: "box" }, h("div", { class: "box-h" }, "Wygląd"), grid));
+  const sw = h("label", { class: "switch" }, h("input", { type: "checkbox", id: "soundToggle", "aria-label": "Dźwięki" }), h("span", {}));
+  const cb = sw.querySelector("input");
+  cb.checked = state.sound;
+  cb.onchange = () => { state.sound = cb.checked; save(); };
+  body.append(h("div", { class: "box" }, h("div", { class: "box-h" }, "Powiadomienia"), row({ icon: "bell", label: "Dźwięki", sub: "dzwonek i nowe wiadomości", trail: sw })));
+  body.append(h("div", { class: "box" },
+    row({ icon: "share", label: "Zaproś znajomych", sub: `twój nick: ${state.me.nick}`, onClick: shareNick }),
+    row({ icon: "logout", label: "Wyloguj", sub: "usuwa dane z tego telefonu", danger: true, onClick: logout })));
+  body.append(h("p", { class: "foot" }, "Paleta · wiadomości i rozmowy idą bezpośrednio między telefonami"));
+}
+function openSettings() { renderSettings(); openPage("#settings"); }
+async function copyNick() { try { await navigator.clipboard.writeText(state.me.nick); toast("Nick skopiowany"); } catch { toast(state.me.nick); } }
+async function logout() {
+  const r = await ask({ title: "Wylogować?", text: "Znikną wpisy, czaty i znajomi zapisani na tym telefonie. Twój nick znowu będzie wolny.", ok: "Wyloguj", danger: true });
+  if (!r) return;
+  try { localStorage.removeItem(KEY); } catch {}
+  try { peer && peer.destroy(); } catch {}
+  location.replace(location.pathname + location.search);
 }
 function renderPlus() {
   const box = $("#plusBody");
   box.replaceChildren();
   const btn = (icon, title, sub, fn) => h("button", { class: "menu-btn", onclick: fn }, h("span", { html: ic(icon) }), h("span", {}, title, h("small", {}, sub)));
   box.append(
-    btn("userplus", "Dodaj znajomego", "wpisz jego nick", () => { closePlus(); addFriend(); }),
-    btn("users", "Stwórz grupkę", "czat i notatniki dla ekipy", () => { closePlus(); addGroup(); }),
+    btn("userplus", "Dodaj znajomego", "po nicku, od razu", () => { closePlus(); addFriend(); }),
+    btn("users", "Nowa grupka", "możesz dodać kilka osób naraz", () => { closePlus(); addGroup(); }),
     btn("share", "Zaproś kogoś do Palety", `twój nick: ${state.me.nick}`, () => shareNick()),
   );
-  if (state.requests.length) {
-    box.append(h("div", { class: "sec-h" }, "Zaproszenia do znajomych"));
-    for (const r of state.requests) {
-      const yes = h("button", { class: "round yes", "aria-label": "Przyjmij", html: ic("check") });
-      const no = h("button", { class: "round no", "aria-label": "Odrzuć", html: ic("close") });
-      yes.onclick = () => acceptRequest(r);
-      no.onclick = () => { state.requests = state.requests.filter((x) => x.id !== r.id); save(); render(); renderPlus(); };
-      box.append(h("div", { class: "req" }, avatar(r.id, "sm"), h("div", { class: "txt" }, h("b", {}, r.nick), "chce być twoim znajomym"), no, yes));
-    }
-  }
 }
 function openPlus() { renderPlus(); $("#plus").hidden = false; }
 function closePlus() { $("#plus").hidden = true; }
@@ -811,25 +944,20 @@ async function shareNick() {
   }
   try { await navigator.clipboard.writeText(`${text}\n${url}`); toast("Zaproszenie skopiowane"); } catch { toast(text); }
 }
-async function callFromHeader(mode) {
-  const cur = state.current;
-  if (!cur) return toast("Najpierw wybierz rozmowę");
-  let key = cur.id;
-  if (cur.type === "group") {
-    const g = curGroup();
-    const others = g.members.filter((m) => m.id !== meKey());
-    const r = await ask({ title: mode === "screen" ? "Komu pokazać ekran?" : "Do kogo dzwonisz?", people: others, single: true, peopleLabel: "Wybierz osobę", ok: "Dzwoń", validate: ({ picked }) => (picked.length ? "" : "Wybierz kogoś") });
-    if (!r) return;
-    key = r.picked[0];
-  }
-  if (!isContact(key)) return toast("Najpierw dodaj tę osobę do znajomych");
-  startCall(key, mode);
+function callFromHeader(mode) {
+  const g = curGroup();
+  if (g) return startCall(g.members.map((m) => m.id), mode, g.id);
+  if (state.current && state.current.type === "dm") return startCall([state.current.id], mode, null);
+  toast("Najpierw wybierz rozmowę");
 }
 
-/* ============ Rozmowy ============ */
+/* ============ Rozmowy (1:1 i grupowe) ============ */
+// Rozmowa grupowa to siatka połączeń: każdy łączy się z każdym. Kto dołącza, wysyła „cjoin”,
+// a osoby już w rozmowie dzwonią do niego (ta z „mniejszym” nickiem, żeby nie było podwójnych połączeń).
 let call = null, incoming = null;
-const rv = () => $("#remoteVideo");
 const lv = () => $("#localVideo");
+const tileEls = new Map();
+const allowed = (key) => isContact(key) || state.groups.some((g) => g.members.some((m) => m.id === key));
 
 function blankTrack() {
   const c = document.createElement("canvas");
@@ -865,58 +993,109 @@ async function getLocal(mode, facing) {
   stream.addTrack(vtrack);
   return { stream, vtrack, blank, mode: m, warn };
 }
+function newCall(id, gid, L, first, outgoing) {
+  return { id, gid, first, outgoing, stream: L.stream, vtrack: L.vtrack, blank: L.blank, mode: L.mode, facing: "user", muted: false, peers: new Map(), start: 0 };
+}
+function callTitle() {
+  if (!call) return "";
+  const g = call.gid && state.groups.find((x) => x.id === call.gid);
+  return g ? g.name : nameOf(call.first);
+}
 
-async function startCall(key, mode) {
+async function startCall(keys, mode, gid) {
   if (call || incoming) return toast("Już trwa rozmowa");
   if (!peerOpen) return toast("Brak połączenia z siecią");
   if (!navigator.mediaDevices || !window.RTCPeerConnection) return toast("Ta przeglądarka nie obsługuje rozmów");
-  toast(`Łączę z ${nameOf(key)}…`);
-  if (!(await ensureOnline(key, 3000))) return toast(`${nameOf(key)} jest teraz offline`);
+  keys = keys.filter((x) => x !== meKey() && allowed(x));
+  if (!keys.length) return toast("Nie ma do kogo zadzwonić");
+  toast(gid ? "Dzwonię do grupki…" : `Łączę z ${nameOf(keys[0])}…`);
+  const ok = await Promise.all(keys.map((x) => ensureOnline(x, 3000)));
+  const targets = keys.filter((_, i) => ok[i]);
+  if (!targets.length) return toast(gid ? "Nikogo z grupki nie ma teraz online" : `${nameOf(keys[0])} jest teraz offline`);
   const L = await getLocal(mode, "user");
   if (call || incoming) { L.stream.getTracks().forEach((t) => t.stop()); return; }
   if (L.warn) toast(L.warn);
-  let mc;
-  try { mc = peer.call(PREFIX + key, L.stream, { metadata: { mode: L.mode } }); } catch { L.stream.getTracks().forEach((t) => t.stop()); return toast("Nie udało się zadzwonić"); }
-  call = { key, mc, stream: L.stream, vtrack: L.vtrack, blank: L.blank, mode: L.mode, facing: "user", remoteMode: "audio", muted: false, connected: false };
-  wireCall(mc);
-  openCallUI("Dzwonię…");
-  call.ring = setTimeout(() => { if (call && !call.connected) endCall(`${nameOf(key)} nie odbiera`, true); }, 30000);
+  call = newCall(uid(), gid || null, L, targets[0], true);
+  for (const x of targets) placeCall(x, false);
+  openCallUI();
+  const c = call;
+  c.ring = setTimeout(() => {
+    if (call !== c) return;
+    for (const [x, p] of [...c.peers]) if (!p.connected) { c.peers.delete(x); try { p.mc.close(); } catch {} sendEphemeral(x, { t: "cend", cid: c.id }); }
+    if (!c.peers.size) endCall(gid ? "Nikt nie odebrał" : `${nameOf(targets[0])} nie odbiera`, false);
+    else renderTiles();
+  }, 30000);
 }
-function wireCall(mc) {
+function placeCall(key, mesh) {
+  try {
+    const mc = peer.call(PREFIX + key, call.stream, { metadata: { mode: call.mode, cid: call.id, gid: call.gid, mesh } });
+    addPeer(key, mc, "audio");
+  } catch {}
+}
+function addPeer(key, mc, mode) {
+  const c = call, p = { mc, stream: null, mode, connected: false };
+  c.peers.set(key, p);
   mc.on("stream", (rs) => {
-    if (!call || call.mc !== mc) return;
-    rv().srcObject = rs;
-    rv().play().catch(() => {});
-    if (!call.connected) {
-      call.connected = true;
-      call.start = now();
-      clearTimeout(call.ring);
-      tick();
-      call.timer = setInterval(tick, 1000);
-    }
-    updateCallUI();
+    if (call !== c || c.peers.get(key) !== p) return;
+    p.stream = rs;
+    p.connected = true;
+    if (!c.start) { c.start = now(); clearTimeout(c.ring); c.timer = setInterval(tick, 1000); }
+    renderTiles();
+    tick();
   });
-  mc.on("close", () => { if (call && call.mc === mc) endCall("Rozmowa zakończona", false); });
-  mc.on("error", () => { if (call && call.mc === mc) endCall("Błąd połączenia", false); });
+  const gone = () => { if (call === c && c.peers.get(key) === p) removePeer(key); };
+  mc.on("close", gone);
+  mc.on("error", gone);
+  renderTiles();
+}
+function removePeer(key) {
+  const p = call.peers.get(key);
+  if (!p) return;
+  call.peers.delete(key);
+  try { p.mc.close(); } catch {}
+  if (!call.peers.size) endCall(call.start ? "Rozmowa zakończona" : call.gid ? "Nikt nie odebrał" : `${nameOf(key)} nie może teraz rozmawiać`, false);
+  else { if (p.connected) toast(`${nameOf(key)} się rozłączył(a)`); renderTiles(); tick(); }
 }
 function tick() {
-  if (!call || !call.connected) return;
+  if (!call) return;
+  const st = $("#callStatus");
+  if (!call.start) { st.textContent = call.outgoing ? "Dzwonię…" : "Łączenie…"; return; }
   const s = Math.floor((now() - call.start) / 1000);
-  $("#callStatus").textContent = `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+  const clock = `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+  const n = [...call.peers.values()].filter((p) => p.connected).length + 1;
+  st.textContent = call.gid ? `${plural(n)} · ${clock}` : clock;
 }
-function openCallUI(status) {
-  $("#callName").textContent = nameOf(call.key);
-  $("#callStatus").textContent = status;
-  $("#callAvatar").replaceChildren(avatar(call.key));
+function openCallUI() {
+  $("#callName").textContent = callTitle();
   lv().srcObject = call.blank ? null : new MediaStream([call.vtrack]);
   $("#call").hidden = false;
+  renderTiles();
+  tick();
   updateCallUI();
+}
+function renderTiles() {
+  if (!call) return;
+  const box = $("#tiles");
+  for (const [key, el] of tileEls) if (!call.peers.has(key)) { el.remove(); tileEls.delete(key); }
+  for (const [key, p] of call.peers) {
+    let el = tileEls.get(key);
+    if (!el) {
+      const v = h("video", { autoplay: "", playsinline: "" });
+      el = h("div", { class: "tile" }, v, h("div", { class: "tav" }, avatar(key), h("div", { class: "tstat" })), h("div", { class: "tname" }, nameOf(key)));
+      tileEls.set(key, el);
+      box.append(el);
+    }
+    const v = el.querySelector("video");
+    if (p.stream && v.srcObject !== p.stream) { v.srcObject = p.stream; v.play().catch(() => {}); }
+    el.classList.toggle("audio", !p.connected || p.mode === "audio");
+    el.querySelector(".tstat").textContent = p.connected ? "" : "dzwoni…";
+  }
+  box.dataset.n = String(Math.max(1, Math.min(call.peers.size, 4)));
+  $("#callName").textContent = callTitle();
 }
 function updateCallUI() {
   if (!call) return;
-  const el = $("#call");
-  el.classList.toggle("audio", call.remoteMode === "audio");
-  el.classList.toggle("nopip", !!call.blank);
+  $("#call").classList.toggle("nopip", !!call.blank);
   lv().classList.toggle("screen", call.mode === "screen");
   $("#cMute").classList.toggle("off", call.muted);
   $("#cMute use").setAttribute("href", call.muted ? "#i-micoff" : "#i-mic");
@@ -927,20 +1106,22 @@ function updateCallUI() {
 }
 async function swapVideo(track, mode) {
   if (!call) return;
-  const old = { v: call.vtrack, blank: call.blank };
+  const c = call, old = { v: c.vtrack, blank: c.blank };
   let blank = null;
   if (!track) { blank = blankTrack(); track = blank.track; }
-  const senders = call.mc.peerConnection.getSenders().filter((s) => s.track && s.track.kind === "video");
-  const sender = senders.find((s) => s.track === old.v) || senders[0];
-  if (!sender) throw new Error("brak nadawcy");
-  await sender.replaceTrack(track);
+  for (const p of c.peers.values()) {
+    const pc = p.mc.peerConnection;
+    const senders = pc ? pc.getSenders().filter((s) => s.track && s.track.kind === "video") : [];
+    const sender = senders.find((s) => s.track === old.v) || senders[0];
+    if (sender) await sender.replaceTrack(track).catch(() => {});
+  }
   if (old.blank) old.blank.stop(); else old.v.stop();
-  call.stream.removeTrack(old.v);
-  call.stream.addTrack(track);
-  Object.assign(call, { vtrack: track, blank, mode });
+  c.stream.removeTrack(old.v);
+  c.stream.addTrack(track);
+  Object.assign(c, { vtrack: track, blank, mode });
   lv().srcObject = blank ? null : new MediaStream([track]);
   track.onended = mode === "screen" ? () => { if (call && call.vtrack === track) swapVideo(null, "audio").catch(() => {}); } : null;
-  sendEphemeral(call.key, { t: "cmode", mode });
+  for (const key of c.peers.keys()) sendEphemeral(key, { t: "cmode", mode, cid: c.id });
   updateCallUI();
 }
 async function toggleCam() {
@@ -969,24 +1150,40 @@ function endCall(reason, notify) {
   call = null;
   clearInterval(c.timer);
   clearTimeout(c.ring);
+  for (const [key, p] of c.peers) {
+    try { p.mc.close(); } catch {}
+    if (notify) sendEphemeral(key, { t: "cend", cid: c.id });
+  }
   c.stream.getTracks().forEach((t) => t.stop());
   c.vtrack.stop();
   if (c.blank) c.blank.stop();
-  try { c.mc.close(); } catch {}
-  rv().srcObject = null;
+  for (const el of tileEls.values()) el.remove();
+  tileEls.clear();
   lv().srcObject = null;
   $("#call").hidden = true;
-  if (notify) sendEphemeral(c.key, { t: "cend" });
   if (reason) toast(reason);
 }
 function onIncomingCall(mc) {
   const from = mc.peer.slice(PREFIX.length);
-  if (!isContact(from) || call || incoming) { try { mc.close(); } catch {} return; }
-  const mode = ["video", "screen"].includes(mc.metadata && mc.metadata.mode) ? mc.metadata.mode : "audio";
-  incoming = { mc, from, mode };
-  $("#incAvatar").replaceChildren(avatar(from));
-  $("#incName").textContent = nameOf(from);
-  $("#incSub").textContent = { audio: "dzwoni do ciebie…", video: "dzwoni wideo…", screen: "chce ci pokazać ekran…" }[mode];
+  const md = mc.metadata || {};
+  const mode = ["video", "screen"].includes(md.mode) ? md.mode : "audio";
+  if (!allowed(from)) { try { mc.close(); } catch {} return; }
+  if (call && md.cid && md.cid === call.id) { // ktoś z tej samej rozmowy grupowej dołącza
+    const old = call.peers.get(from);
+    if (old) { call.peers.delete(from); try { old.mc.close(); } catch {} }
+    mc.answer(call.stream);
+    addPeer(from, mc, mode);
+    sendEphemeral(from, { t: "cmode", mode: call.mode, cid: call.id });
+    return;
+  }
+  if (call || incoming) { try { mc.close(); } catch {} return; }
+  const g = md.gid ? state.groups.find((x) => x.id === md.gid && x.members.some((m) => m.id === from)) : null;
+  incoming = { mc, from, mode, cid: typeof md.cid === "string" ? md.cid.slice(0, 24) : uid(), gid: g ? g.id : null };
+  $("#incAvatar").replaceChildren(g ? h("span", { class: "avatar emoji" }, g.emoji) : avatar(from));
+  $("#incName").textContent = g ? g.name : nameOf(from);
+  $("#incSub").textContent = g
+    ? `${nameOf(from)} zaprasza do rozmowy ${mode === "video" ? "wideo" : "grupowej"}…`
+    : { audio: "dzwoni do ciebie…", video: "dzwoni wideo…", screen: "chce ci pokazać ekran…" }[mode];
   $("#incoming").hidden = false;
   ring(true);
   mc.on("close", () => { if (incoming && incoming.mc === mc) { dropIncoming(); toast(`Nieodebrane połączenie od ${nameOf(from)}`); } });
@@ -1001,37 +1198,50 @@ async function acceptIncoming() {
   if (!inc) return;
   dropIncoming();
   const L = await getLocal(inc.mode === "video" ? "video" : "audio", "user");
+  if (call) { L.stream.getTracks().forEach((t) => t.stop()); return; }
   if (L.warn) toast(L.warn);
-  call = { key: inc.from, mc: inc.mc, stream: L.stream, vtrack: L.vtrack, blank: L.blank, mode: L.mode, facing: "user", remoteMode: inc.mode === "audio" ? "audio" : "video", muted: false, connected: false };
+  call = newCall(inc.cid, inc.gid, L, inc.from, false);
   inc.mc.answer(L.stream);
-  wireCall(inc.mc);
-  openCallUI("Łączenie…");
-  sendEphemeral(inc.from, { t: "cmode", mode: L.mode });
-  call.ring = setTimeout(() => { if (call && !call.connected) endCall("Nie udało się połączyć", true); }, 20000);
+  addPeer(inc.from, inc.mc, inc.mode);
+  openCallUI();
+  sendEphemeral(inc.from, { t: "cmode", mode: L.mode, cid: call.id });
+  const g = inc.gid && state.groups.find((x) => x.id === inc.gid);
+  if (g) for (const m of g.members) if (m.id !== meKey() && m.id !== inc.from) sendEphemeral(m.id, { t: "cjoin", cid: call.id, gid: g.id });
+  const c = call;
+  c.ring = setTimeout(() => { if (call === c && !c.start) endCall("Nie udało się połączyć", true); }, 20000);
 }
 function declineIncoming() {
   const inc = incoming;
   if (!inc) return;
   dropIncoming();
   try { inc.mc.close(); } catch {}
-  sendEphemeral(inc.from, { t: "cend" });
+  sendEphemeral(inc.from, { t: "cend", cid: inc.cid });
+}
+function onCallEvent(from, d) {
+  if (d.t === "cmode") {
+    const p = call && call.peers.get(from);
+    if (p && ["audio", "video", "screen"].includes(d.mode)) { p.mode = d.mode; renderTiles(); }
+  } else if (d.t === "cend") {
+    if (call && call.peers.has(from) && (!d.cid || d.cid === call.id)) removePeer(from);
+    else if (incoming && incoming.from === from) { dropIncoming(); toast(`Nieodebrane połączenie od ${nameOf(from)}`); }
+  } else if (d.t === "cjoin") {
+    if (!call || d.cid !== call.id || !call.gid || d.gid !== call.gid || call.peers.has(from)) return;
+    if (meKey() < from) placeCall(from, true);
+    else sendEphemeral(from, { t: "cjoin", cid: call.id, gid: call.gid });
+  }
 }
 
 /* ============ Panel, ustawienia, zdarzenia ============ */
-function renderThemes() {
-  const box = $("#themes");
-  box.replaceChildren();
-  for (const t of THEMES) {
-    const b = h("button", { type: "button", class: "theme" + (state.theme === t.id ? " active" : "") }, h("span", { class: "swatch", style: `background:${t.sw}` }), t.name);
-    b.onclick = () => { state.theme = t.id; save(); render(); renderThemes(); };
-    box.append(b);
-  }
-}
 function wireUI() {
   $("#railAdd").onclick = openPlus;
   $("#closePlus").onclick = closePlus;
   $("#plus").onclick = (e) => { if (e.target.id === "plus") closePlus(); };
-  $("#railMe").onclick = () => $("#openSettings").click();
+  $("#railMe").onclick = openSettings;
+  $("#openSettings").onclick = openSettings;
+  $("#closeSettings").onclick = () => closePage("#settings");
+  $("#closeInfo").onclick = () => closePage("#info");
+  $("#titleBox").onclick = () => openInfo();
+  $("#roomAv").onclick = () => openInfo();
   document.querySelectorAll("[data-call]").forEach((b) => (b.onclick = () => callFromHeader(b.dataset.call)));
   if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) $("#cScreen").hidden = true;
 
@@ -1058,24 +1268,6 @@ function wireUI() {
     input.focus();
   };
 
-  $("#openSettings").onclick = () => {
-    $("#setNick").textContent = state.me.nick;
-    $("#soundToggle").checked = state.sound;
-    renderThemes();
-    $("#settings").hidden = false;
-  };
-  $("#closeSettings").onclick = () => ($("#settings").hidden = true);
-  $("#settings").onclick = (e) => { if (e.target.id === "settings") $("#settings").hidden = true; };
-  $("#copyNick").onclick = async () => { try { await navigator.clipboard.writeText(state.me.nick); toast("Nick skopiowany"); } catch { toast(state.me.nick); } };
-  $("#soundToggle").onchange = (e) => { state.sound = e.target.checked; save(); };
-  $("#resetData").onclick = async () => {
-    $("#settings").hidden = true;
-    const r = await ask({ title: "Wylogować?", text: "Znikną wpisy, czaty i znajomi zapisani na tym telefonie. Twój nick znowu będzie wolny.", ok: "Wyloguj", danger: true });
-    if (!r) return;
-    try { localStorage.removeItem(KEY); } catch {}
-    try { peer && peer.destroy(); } catch {}
-    location.replace(location.pathname + location.search);
-  };
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden && state.me) {
       sweep();
